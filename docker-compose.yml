@@ -1,0 +1,43 @@
+version: '3.8'
+
+services:
+  # Isolated DevPanel Application Service
+  devpanel:
+    build: .
+    container_name: devpanel_app
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - PANEL_MONGODB_URI=mongodb://mongo_devpanel:27017/devpanel
+      - SESSION_SECRET=devpanel-production-secret-replace-me-2026
+      - WORKSPACE_ROOT=/app/workspaces
+      - MONITORING_ENABLED=true
+      - RATE_LIMIT_ENABLED=true
+    volumes:
+      - devpanel_workspaces:/app/workspaces
+      - devpanel_data:/app/data
+    depends_on:
+      - mongo_devpanel
+
+  # Isolated Database for Panel Metadata ONLY (Strictly separated from application database)
+  mongo_devpanel:
+    image: mongo:7.0
+    container_name: devpanel_mongo
+    restart: unless-stopped
+    volumes:
+      - devpanel_mongo_data:/data/db
+    networks:
+      - devpanel_internal
+
+volumes:
+  devpanel_workspaces:
+  devpanel_data:
+  devpanel_mongo_data:
+
+networks:
+  devpanel_internal:
+    driver: bridge
+
