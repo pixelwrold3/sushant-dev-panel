@@ -50,34 +50,59 @@ function getProjectDir(projectId) {
   return dir;
 }
 
-app.prepare().then(() => {
-  const server = createServer(async (req, res) => {
-    // Safety check: ensure response is a valid HTTP ServerResponse
-    if (!res || typeof res.setHeader !== 'function') {
-      if (res && typeof res.end === 'function') res.end();
-      return;
-    }
+process.on('uncaughtException', (err) => {
+  if (err.code === 'EADDRINUSE') {
+    console.error(`\x1b[31m[DevPanel Error] Port ${port} is already in use by another process.\x1b[0m`);
+    console.error(`Run: fuser -k ${port}/tcp to free the port and restart.`);
+  } else {
+    console.error('\x1b[31m[DevPanel Fatal Error]:\x1b[0m', err);
+  }
+  process.exit(1);
+});
 
-    const parsedUrl = parse(req.url, true);
-    // Ignore WebSocket upgrade HTTP requests here so Next.js doesn't error
-    if (parsedUrl.pathname && parsedUrl.pathname.startsWith('/api/ws')) {
-      res.writeHead(426, { 'Content-Type': 'text/plain' });
-      res.end('Upgrade Required');
-      return;
-    }
+process.on('unhandledRejection', (reason) => {
+  console.error('\x1b[31m[DevPanel Unhandled Rejection]:\x1b[0m', reason);
+});
 
-    try {
-      await handle(req, res, parsedUrl);
-    } catch (err) {
-      console.error('Error handling request:', req.url, err);
-      if (!res.headersSent) {
-        res.statusCode = 500;
-        res.end('Internal Server Error');
+app.prepare()
+  .then(() => {
+    const server = createServer(async (req, res) => {
+      // Safety check: ensure response is a valid HTTP ServerResponse
+      if (!res || typeof res.setHeader !== 'function') {
+        if (res && typeof res.end === 'function') res.end();
+        return;
       }
-    }
-  });
 
-  const wss = new WebSocketServer({ noServer: true });
+      const parsedUrl = parse(req.url, true);
+      // Ignore WebSocket upgrade HTTP requests here so Next.js doesn't error
+      if (parsedUrl.pathname && parsedUrl.pathname.startsWith('/api/ws')) {
+        res.writeHead(426, { 'Content-Type': 'text/plain' });
+        res.end('Upgrade Required');
+        return;
+      }
+
+      try {
+        await handle(req, res, parsedUrl);
+      } catch (err) {
+        console.error('Error handling request:', req.url, err);
+        if (!res.headersSent) {
+          res.statusCode = 500;
+          res.end('Internal Server Error');
+        }
+      }
+    });
+
+    server.on('error', (err) => {
+      if (err.code === 'EADDRINUSE') {
+        console.error(`\x1b[31m[DevPanel Error] Port ${port} is already in use by a background process.\x1b[0m`);
+        console.error(`Please kill the process using port ${port} by running:\n  fuser -k ${port}/tcp\n`);
+      } else {
+        console.error('\x1b[31m[DevPanel Server Error]:\x1b[0m', err);
+      }
+      process.exit(1);
+    });
+
+    const wss = new WebSocketServer({ noServer: true });
 
   server.on('upgrade', (request, socket, head) => {
     const { pathname } = parse(request.url, true);
@@ -226,4 +251,11 @@ app.prepare().then(() => {
     console.log(`> DevPanel ready on http://${hostname}:${port}`);
     console.log(`> Connected Project Targeting Enabled (/var/www/diet-website supported)`);
   });
+}).catch((err) => {
+  console.error('\x1b[31m[DevPanel Init Error]:\x1b[0m Failed to initialize Next.js app:');
+  console.error(err.message || err);
+  if (err.message && err.message.includes("Could not find a production build in the '.next' directory")) {
+    console.error('\x1b[33mFix: Run "npm run build" first before starting the production server.\x1b[0m');
+  }
+  process.exit(1);
 });
