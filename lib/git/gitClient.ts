@@ -1,7 +1,8 @@
-import simpleGit, { SimpleGit, StatusResult, LogResult, DiffResult } from 'simple-git';
+import simpleGit, { SimpleGit, StatusResult, LogResult } from 'simple-git';
 import path from 'path';
 import fs from 'fs';
 import { resolveWorkspacePath } from '../filesystem/workspace';
+import { getDatabase, saveDatabase, PullHistoryRecord } from '../database/db';
 
 export interface GitFileStatus {
   path: string;
@@ -18,6 +19,9 @@ export interface GitPanelStatus {
   behind: number;
   files: GitFileStatus[];
   stagedFiles: GitFileStatus[];
+  currentCommit?: string;
+  canUndoLastPull?: boolean;
+  lastPull?: PullHistoryRecord | null;
 }
 
 export function getGit(workspaceId: string): SimpleGit {
@@ -37,7 +41,6 @@ export async function initOrCheckGit(workspaceId: string): Promise<boolean> {
     const git = getGit(workspaceId);
     try {
       await git.init();
-      // Configure initial default identity if not set locally
       await git.addConfig('user.name', 'DevPanel User', false, 'local');
       await git.addConfig('user.email', 'developer@devpanel.local', false, 'local');
       return true;
@@ -50,20 +53,16 @@ export async function initOrCheckGit(workspaceId: string): Promise<boolean> {
 
 export async function cloneRepository(workspaceId: string, repoUrl: string, branch?: string): Promise<void> {
   const targetDir = resolveWorkspacePath(workspaceId, '');
-  // Sanitize repoUrl
   if (!repoUrl || typeof repoUrl !== 'string') {
     throw new Error('Valid repository URL is required.');
   }
 
-  // Basic sanity check to prevent command injection in git url
   if (repoUrl.startsWith('-') || /[\r\n\t]/.test(repoUrl)) {
     throw new Error('Invalid repository URL specified.');
   }
 
   const git = simpleGit(path.dirname(targetDir));
   const options = branch ? ['-b', branch] : [];
-
-  // If target folder exists and has files, clean or clone into it
   await git.clone(repoUrl, targetDir, options);
 }
 
@@ -89,7 +88,12 @@ export async function getGitStatus(workspaceId: string): Promise<GitPanelStatus>
     if (remotes.length > 0 && remotes[0].refs.fetch) {
       remoteUrl = remotes[0].refs.fetch;
     }
-  } catch { }
+  } catch {}
+
+  let currentCommit = '';
+  try {
+    currentCommit = await git.revparse(['--short', 'HEAD']);
+  } catch {}
 
   const files: GitFileStatus[] = [];
   const stagedFiles: GitFileStatus[] = [];
@@ -116,6 +120,11 @@ export async function getGitStatus(workspaceId: string): Promise<GitPanelStatus>
     }
   }
 
+  const db = getDatabase();
+  const history = (db.pullHistory || []).filter(h => h.projectId === workspaceId);
+  const lastPull = history.length > 0 ? history[0] : null;
+  const canUndoLastPull = lastPull !== null && lastPull.status === 'active';
+
   return {
     isGitRepo: true,
     currentBranch: status.current || 'main',
@@ -124,6 +133,9 @@ export async function getGitStatus(workspaceId: string): Promise<GitPanelStatus>
     behind: status.behind,
     files,
     stagedFiles,
+    currentCommit,
+    canUndoLastPull,
+    lastPull,
   };
 }
 
@@ -133,7 +145,6 @@ export async function getBranches(workspaceId: string) {
 }
 
 export async function checkoutBranch(workspaceId: string, branchName: string, create: boolean = false) {
-  // Sanitize branch name
   const cleanBranch = branchName.trim();
   if (!cleanBranch || cleanBranch.startsWith('-') || /[\s~^:?*\[\\]/.test(cleanBranch)) {
     throw new Error('Invalid branch name.');
@@ -167,7 +178,6 @@ export async function commitChanges(workspaceId: string, message: string) {
     throw new Error('Commit message cannot be empty.');
   }
   const git = getGit(workspaceId);
-  // Auto stage all changes if nothing staged
   const status = await git.status();
   const hasStaged = status.files.some(f => f.index !== ' ' && f.index !== '?');
   if (!hasStaged) {
@@ -176,14 +186,158 @@ export async function commitChanges(workspaceId: string, message: string) {
   return await git.commit(message);
 }
 
-export async function gitPull(workspaceId: string) {
-  const git = getGit(workspaceId);
-  return await git.pull();
-}
-
 export async function gitPush(workspaceId: string) {
   const git = getGit(workspaceId);
   return await git.push();
+}
+
+/**
+ * Safe Git Pull with .env Preservation & Undo Rollback Tracking
+ */
+export async function gitPull(workspaceId: string, options: { protectEnv?: boolean; user?: string } = {}) {
+  const git = getGit(workspaceId);
+  const projectDir = resolveWorkspacePath(workspaceId, '');
+
+  let preCommit = '';
+  try {
+    preCommit = await git.revparse(['HEAD']);
+  } catch {
+    preCommit = 'HEAD';
+  }
+
+  // Backup .env files if protectEnv is true (default true)
+  const envBackups = new Map<string, string>();
+  const envFiles = ['.env', '.env.local', '.env.production', '.env.development'];
+
+  if (options.protectEnv !== false) {
+    for (const f of envFiles) {
+      const full = path.join(projectDir, f);
+      if (fs.existsSync(full)) {
+        try {
+          envBackups.set(f, fs.readFileSync(full, 'utf8'));
+        } catch {}
+      }
+    }
+  }
+
+  // Execute pull
+  const pullResult = await git.pull();
+
+  let postCommit = '';
+  try {
+    postCommit = await git.revparse(['HEAD']);
+  } catch {
+    postCommit = preCommit;
+  }
+
+  // Restore .env backups to guarantee server environment is NOT altered
+  if (options.protectEnv !== false && envBackups.size > 0) {
+    for (const [f, content] of envBackups.entries()) {
+      try {
+        fs.writeFileSync(path.join(projectDir, f), content, 'utf8');
+      } catch {}
+    }
+  }
+
+  // Get current branch
+  let currentBranch = 'main';
+  try {
+    const status = await git.status();
+    currentBranch = status.current || 'main';
+  } catch {}
+
+  // Record in Pull History
+  const db = getDatabase();
+  if (!db.pullHistory) db.pullHistory = [];
+
+  const historyRecord: PullHistoryRecord = {
+    id: `pull_${Date.now()}_${Math.random().toString(36).substring(7)}`,
+    projectId: workspaceId,
+    timestamp: new Date().toISOString(),
+    user: options.user || 'admin@devpanel.local',
+    fromCommit: preCommit,
+    toCommit: postCommit,
+    branch: currentBranch,
+    status: 'active',
+    envProtected: options.protectEnv !== false,
+    affectedFiles: pullResult?.files || [],
+  };
+
+  db.pullHistory.unshift(historyRecord);
+  if (db.pullHistory.length > 50) {
+    db.pullHistory = db.pullHistory.slice(0, 50);
+  }
+  saveDatabase();
+
+  return {
+    ...pullResult,
+    historyRecord,
+    preCommit: preCommit.slice(0, 7),
+    postCommit: postCommit.slice(0, 7),
+    envProtected: options.protectEnv !== false,
+  };
+}
+
+/**
+ * Undo Last Pull (Rollback to pre-pull commit)
+ */
+export async function gitUndoPull(workspaceId: string, pullId?: string, targetCommit?: string) {
+  const git = getGit(workspaceId);
+  const projectDir = resolveWorkspacePath(workspaceId, '');
+  const db = getDatabase();
+  const history = db.pullHistory || [];
+
+  let record: PullHistoryRecord | undefined;
+  if (pullId) {
+    record = history.find(h => h.id === pullId);
+  } else {
+    record = history.find(h => h.projectId === workspaceId && h.status === 'active');
+  }
+
+  const revertTo = targetCommit || record?.fromCommit;
+  if (!revertTo) {
+    throw new Error('No previous pull commit found to undo.');
+  }
+
+  // Preserve .env during reset
+  const envBackups = new Map<string, string>();
+  const envFiles = ['.env', '.env.local', '.env.production', '.env.development'];
+  for (const f of envFiles) {
+    const full = path.join(projectDir, f);
+    if (fs.existsSync(full)) {
+      try {
+        envBackups.set(f, fs.readFileSync(full, 'utf8'));
+      } catch {}
+    }
+  }
+
+  // Hard reset to pre-pull commit
+  await git.reset(['--hard', revertTo]);
+
+  // Restore .env files
+  for (const [f, content] of envBackups.entries()) {
+    try {
+      fs.writeFileSync(path.join(projectDir, f), content, 'utf8');
+    } catch {}
+  }
+
+  if (record) {
+    record.status = 'undone';
+    record.revertedAt = new Date().toISOString();
+  }
+  saveDatabase();
+
+  return {
+    success: true,
+    revertedTo: revertTo.slice(0, 7),
+    revertedCommitFull: revertTo,
+    message: `Successfully undone pull! Reverted files back to commit ${revertTo.slice(0, 7)}.`,
+  };
+}
+
+export function getPullHistory(workspaceId: string): PullHistoryRecord[] {
+  const db = getDatabase();
+  return (db.pullHistory || []).filter(h => h.projectId === workspaceId);
 }
 
 export async function getCommitHistory(workspaceId: string, maxCount: number = 20) {
@@ -207,4 +361,3 @@ export async function getFileDiff(workspaceId: string, filePath?: string): Promi
     return '';
   }
 }
-

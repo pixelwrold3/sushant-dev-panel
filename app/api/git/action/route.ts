@@ -6,6 +6,8 @@ import {
   unstageFile,
   commitChanges,
   gitPull,
+  gitUndoPull,
+  getPullHistory,
   gitPush,
   checkoutBranch,
   getFileDiff,
@@ -17,62 +19,100 @@ export async function POST(req: NextRequest) {
     req,
     async (r, user) => {
       const body = await req.json();
-      const { workspaceId, action, filePath, message, branchName, createBranch, repoUrl } = body;
-      const wsId = workspaceId || 'main-website';
+      const {
+        projectId,
+        workspaceId,
+        action,
+        filePath,
+        message,
+        branchName,
+        createBranch,
+        repoUrl,
+        protectEnv,
+        pullId,
+        targetCommit,
+      } = body;
+      const targetId = projectId || workspaceId || 'diet-ghazipur';
       const ip = getClientIp(req);
 
       try {
         switch (action) {
           case 'stage':
             if (filePath) {
-              await stageFile(wsId, filePath);
+              await stageFile(targetId, filePath);
             } else {
-              await stageAll(wsId);
+              await stageAll(targetId);
             }
             return NextResponse.json({ success: true, message: 'Changes staged' });
 
           case 'unstage':
             if (!filePath) throw new Error('File path required to unstage');
-            await unstageFile(wsId, filePath);
+            await unstageFile(targetId, filePath);
             return NextResponse.json({ success: true, message: 'File unstaged' });
 
           case 'commit':
             if (!message) throw new Error('Commit message is required');
-            const commitResult = await commitChanges(wsId, message);
-            logAudit(user.email, 'Git Commit', `Committed: "${message}" (${commitResult.commit || ''})`, wsId, ip, 'Success');
+            const commitResult = await commitChanges(targetId, message);
+            logAudit(user.email, 'Git Commit', `Committed: "${message}" (${commitResult.commit || ''})`, targetId, ip, 'Success');
             return NextResponse.json({ success: true, commit: commitResult });
 
           case 'push':
-            const pushResult = await gitPush(wsId);
-            logAudit(user.email, 'Git Push', `Pushed repository changes to remote`, wsId, ip, 'Success');
+            const pushResult = await gitPush(targetId);
+            logAudit(user.email, 'Git Push', `Pushed repository changes to remote`, targetId, ip, 'Success');
             return NextResponse.json({ success: true, pushResult });
 
           case 'pull':
-            const pullResult = await gitPull(wsId);
-            logAudit(user.email, 'Git Pull', `Pulled latest changes from remote`, wsId, ip, 'Success');
+            const pullResult = await gitPull(targetId, {
+              protectEnv: protectEnv !== false,
+              user: user.email,
+            });
+            logAudit(
+              user.email,
+              'Git Pull',
+              `Pulled changes into ${targetId} (Pre: ${pullResult.preCommit} -> Post: ${pullResult.postCommit}, envProtected: ${pullResult.envProtected})`,
+              targetId,
+              ip,
+              'Success'
+            );
             return NextResponse.json({ success: true, pullResult });
+
+          case 'undo_pull':
+            const undoResult = await gitUndoPull(targetId, pullId, targetCommit);
+            logAudit(
+              user.email,
+              'Git Pull Undone',
+              `Reverted pull on ${targetId} back to commit ${undoResult.revertedTo}`,
+              targetId,
+              ip,
+              'Warning'
+            );
+            return NextResponse.json({ success: true, undoResult });
+
+          case 'pull_history':
+            const history = getPullHistory(targetId);
+            return NextResponse.json({ success: true, history });
 
           case 'branch':
             if (!branchName) throw new Error('Branch name required');
-            await checkoutBranch(wsId, branchName, !!createBranch);
+            await checkoutBranch(targetId, branchName, !!createBranch);
             logAudit(
               user.email,
               createBranch ? 'Git Branch Created' : 'Git Branch Checkout',
               `Switched to branch: ${branchName}`,
-              wsId,
+              targetId,
               ip,
               'Success'
             );
             return NextResponse.json({ success: true, currentBranch: branchName });
 
           case 'diff':
-            const diff = await getFileDiff(wsId, filePath);
+            const diff = await getFileDiff(targetId, filePath);
             return NextResponse.json({ success: true, diff });
 
           case 'clone':
             if (!repoUrl) throw new Error('Repository URL required');
-            await cloneRepository(wsId, repoUrl, branchName);
-            logAudit(user.email, 'Git Clone', `Cloned ${repoUrl}`, wsId, ip, 'Success');
+            await cloneRepository(targetId, repoUrl, branchName);
+            logAudit(user.email, 'Git Clone', `Cloned ${repoUrl}`, targetId, ip, 'Success');
             return NextResponse.json({ success: true });
 
           default:
@@ -85,4 +125,3 @@ export async function POST(req: NextRequest) {
     'git_commit_push'
   );
 }
-

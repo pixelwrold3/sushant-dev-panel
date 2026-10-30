@@ -17,7 +17,6 @@ const port = parseInt(process.env.PORT || '62244', 10);
 const app = next({ dev, hostname, port });
 const handle = app.getRequestHandler();
 
-// Get the database schema directly to find registered projects
 function getProjectDir(projectId) {
   const dbFile = path.resolve(process.cwd(), 'data', 'local-db.json');
   if (fs.existsSync(dbFile)) {
@@ -53,13 +52,22 @@ function getProjectDir(projectId) {
 
 app.prepare().then(() => {
   const server = createServer(async (req, res) => {
+    const parsedUrl = parse(req.url, true);
+    // Ignore WebSocket upgrade HTTP requests here so Next.js doesn't error
+    if (parsedUrl.pathname && parsedUrl.pathname.startsWith('/api/ws')) {
+      res.writeHead(426, { 'Content-Type': 'text/plain' });
+      res.end('Upgrade Required');
+      return;
+    }
+
     try {
-      const parsedUrl = parse(req.url, true);
       await handle(req, res, parsedUrl);
     } catch (err) {
       console.error('Error handling request:', req.url, err);
-      res.statusCode = 500;
-      res.end('Internal Server Error');
+      if (!res.headersSent) {
+        res.statusCode = 500;
+        res.end('Internal Server Error');
+      }
     }
   });
 
@@ -68,7 +76,7 @@ app.prepare().then(() => {
   server.on('upgrade', (request, socket, head) => {
     const { pathname } = parse(request.url, true);
 
-    if (pathname === '/api/ws/terminal' || pathname === '/api/ws/metrics') {
+    if (pathname && (pathname.startsWith('/api/ws/terminal') || pathname.startsWith('/api/ws/metrics'))) {
       wss.handleUpgrade(request, socket, head, (ws) => {
         wss.emit('connection', ws, request);
       });
@@ -80,7 +88,7 @@ app.prepare().then(() => {
   wss.on('connection', (ws, request) => {
     const { pathname, query } = parse(request.url, true);
 
-    if (pathname === '/api/ws/metrics') {
+    if (pathname && pathname.startsWith('/api/ws/metrics')) {
       const sendMetrics = () => {
         if (ws.readyState === WebSocket.OPEN) {
           try {
@@ -139,12 +147,12 @@ app.prepare().then(() => {
       const projectPath = getProjectDir(targetProject);
 
       ws.send(`\r\n\x1b[1;36m DevPanel Project Terminal\x1b[0m\r\n`);
-      ws.send(`\x1b[90mActive Project: ${targetProject}\x1b[0m\r\n`);
-      ws.send(`\x1b[90mTarget Directory: ${projectPath}\x1b[0m\r\n\r\n$ `);
+      ws.send(`\x1b[90mConnected Project: ${targetProject}\x1b[0m\r\n`);
+      ws.send(`\x1b[90mTarget Directory: ${projectPath}\x1b[0m\r\n\r\n`);
 
       const isWin = process.platform === 'win32';
       const shell = isWin ? 'powershell.exe' : 'bash';
-      const shellArgs = isWin ? ['-NoLogo'] : [];
+      const shellArgs = isWin ? ['-NoLogo'] : ['-i'];
 
       let proc;
       try {
@@ -154,6 +162,9 @@ app.prepare().then(() => {
             ...process.env,
             WORKSPACE_ISOLATED: 'true',
             PATH: process.env.PATH,
+            TERM: 'xterm-256color',
+            COLORTERM: 'truecolor',
+            PWD: projectPath,
           },
           shell: false,
         });
@@ -166,18 +177,28 @@ app.prepare().then(() => {
 
         proc.stderr.on('data', (data) => {
           if (ws.readyState === WebSocket.OPEN) {
-            ws.send(`\x1b[31m${data.toString()}\x1b[0m`);
+            ws.send(data.toString());
           }
         });
 
         proc.on('close', (code) => {
           if (ws.readyState === WebSocket.OPEN) {
-            ws.send(`\r\nProcess exited with code ${code}\r\n`);
+            ws.send(`\r\n\x1b[90m[Process exited with code ${code}]\x1b[0m\r\n`);
+          }
+        });
+
+        proc.on('error', (err) => {
+          if (ws.readyState === WebSocket.OPEN) {
+            ws.send(`\r\n\x1b[31m[Process error: ${err.message}]\x1b[0m\r\n`);
           }
         });
 
         ws.on('message', (msg) => {
-          const str = msg.toString();
+          let str = msg.toString();
+          // Convert carriage return (\r) from xterm into newline (\n) for linux shells
+          if (str === '\r') {
+            str = '\n';
+          }
           if (proc && proc.stdin && proc.stdin.writable) {
             proc.stdin.write(str);
           }
@@ -185,7 +206,7 @@ app.prepare().then(() => {
 
         ws.on('close', () => {
           if (proc) {
-            proc.kill();
+            try { proc.kill(); } catch {}
           }
         });
       } catch (err) {

@@ -4,9 +4,11 @@ import React, { useState, useEffect, useRef } from 'react';
 import dynamic from 'next/dynamic';
 import {
   Folder,
+  FolderOpen,
   FolderPlus,
   FilePlus,
   FileCode,
+  FileText,
   Save,
   Terminal as TerminalIcon,
   X,
@@ -16,7 +18,11 @@ import {
   FolderGit2,
   Plus,
   Server,
-  Layers,
+  ChevronRight,
+  ChevronDown,
+  FoldHorizontal,
+  UnfoldHorizontal,
+  Image as ImageIcon,
 } from 'lucide-react';
 import TerminalView from '@/components/terminal/TerminalView';
 
@@ -68,6 +74,29 @@ function getLanguageFromPath(filePath: string): string {
   }
 }
 
+function getFileIcon(fileName: string) {
+  const ext = fileName.split('.').pop()?.toLowerCase();
+  if (['png', 'jpg', 'jpeg', 'svg', 'ico', 'gif', 'webp'].includes(ext || '')) {
+    return <ImageIcon className="w-3.5 h-3.5 text-purple-400 flex-shrink-0" />;
+  }
+  if (['ts', 'tsx'].includes(ext || '')) {
+    return <FileCode className="w-3.5 h-3.5 text-blue-400 flex-shrink-0" />;
+  }
+  if (['js', 'jsx', 'mjs'].includes(ext || '')) {
+    return <FileCode className="w-3.5 h-3.5 text-yellow-400 flex-shrink-0" />;
+  }
+  if (['json'].includes(ext || '')) {
+    return <FileText className="w-3.5 h-3.5 text-amber-300 flex-shrink-0" />;
+  }
+  if (['css', 'scss'].includes(ext || '')) {
+    return <FileCode className="w-3.5 h-3.5 text-cyan-400 flex-shrink-0" />;
+  }
+  if (['html'].includes(ext || '')) {
+    return <FileCode className="w-3.5 h-3.5 text-orange-400 flex-shrink-0" />;
+  }
+  return <FileText className="w-3.5 h-3.5 text-gray-400 flex-shrink-0" />;
+}
+
 export default function EditorPage() {
   const [projectId, setProjectId] = useState('diet-ghazipur');
   const [projects, setProjects] = useState<any[]>([]);
@@ -75,6 +104,9 @@ export default function EditorPage() {
   const [openTabs, setOpenTabs] = useState<OpenTab[]>([]);
   const [activeTabPath, setActiveTabPath] = useState<string | null>(null);
   const [saveStatus, setSaveStatus] = useState<string | null>(null);
+
+  // VS Code collapsible folder state
+  const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set(['src', 'client']));
 
   // Connect Project Modal
   const [connectModal, setConnectModal] = useState(false);
@@ -115,7 +147,6 @@ export default function EditorPage() {
       const data = await res.json();
       if (data.projects) {
         setProjects(data.projects);
-        // Default to Diet Ghazipur or first project
         const diet = data.projects.find((p: any) => p.id === 'diet-ghazipur');
         const active = diet ? diet.id : (data.projects[0]?.id || 'diet-ghazipur');
         setProjectId(active);
@@ -127,6 +158,37 @@ export default function EditorPage() {
   useEffect(() => {
     fetchProjects();
   }, []);
+
+  const toggleFolder = (folderPath: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setExpandedFolders((prev) => {
+      const next = new Set(prev);
+      if (next.has(folderPath)) {
+        next.delete(folderPath);
+      } else {
+        next.add(folderPath);
+      }
+      return next;
+    });
+  };
+
+  const collapseAllFolders = () => {
+    setExpandedFolders(new Set());
+  };
+
+  const expandAllFolders = () => {
+    const allPaths: string[] = [];
+    const traverse = (items: any[]) => {
+      for (const item of items) {
+        if (item.type === 'directory') {
+          allPaths.push(item.path);
+          if (item.children) traverse(item.children);
+        }
+      }
+    };
+    traverse(fileTree);
+    setExpandedFolders(new Set(allPaths));
+  };
 
   const handleOpenFile = async (path: string, name: string) => {
     const existing = openTabs.find((t) => t.path === path);
@@ -317,24 +379,49 @@ export default function EditorPage() {
   const currentProjectObj = projects.find((p) => p.id === projectId);
   const activeTab = openTabs.find((t) => t.path === activeTabPath);
 
+  // VS Code recursive tree renderer with collapsible folder state
   const renderTreeNode = (node: any, depth = 0) => {
     const isDir = node.type === 'directory';
+    const isExpanded = expandedFolders.has(node.path);
 
     return (
-      <div key={node.path} style={{ paddingLeft: `${depth * 14}px` }}>
+      <div key={node.path} className="select-none">
         <div
-          onClick={() => {
-            if (!isDir) handleOpenFile(node.path, node.name);
+          onClick={(e) => {
+            if (isDir) {
+              toggleFolder(node.path, e);
+            } else {
+              handleOpenFile(node.path, node.name);
+            }
           }}
-          className={`flex items-center justify-between px-2 py-1.5 rounded text-xs cursor-pointer group transition-colors ${
-            activeTabPath === node.path ? 'bg-[#1e293b] text-blue-400 font-medium' : 'text-gray-300 hover:bg-[#131e36]'
+          style={{ paddingLeft: `${depth * 14 + 6}px` }}
+          className={`flex items-center justify-between pr-2 py-1 rounded text-xs cursor-pointer group transition-colors ${
+            activeTabPath === node.path
+              ? 'bg-[#1e293b] text-blue-400 font-medium'
+              : 'text-gray-300 hover:bg-[#131e36] hover:text-white'
           }`}
         >
-          <div className="flex items-center space-x-2 truncate">
+          <div className="flex items-center space-x-1.5 truncate">
             {isDir ? (
-              <Folder className="w-3.5 h-3.5 text-blue-400 flex-shrink-0" />
+              <>
+                <span className="p-0.5 text-gray-400 hover:text-white">
+                  {isExpanded ? (
+                    <ChevronDown className="w-3 h-3 text-gray-400 flex-shrink-0" />
+                  ) : (
+                    <ChevronRight className="w-3 h-3 text-gray-400 flex-shrink-0" />
+                  )}
+                </span>
+                {isExpanded ? (
+                  <FolderOpen className="w-3.5 h-3.5 text-blue-400 flex-shrink-0" />
+                ) : (
+                  <Folder className="w-3.5 h-3.5 text-blue-400 flex-shrink-0" />
+                )}
+              </>
             ) : (
-              <FileCode className="w-3.5 h-3.5 text-gray-400 flex-shrink-0" />
+              <>
+                <span className="w-3" />
+                {getFileIcon(node.name)}
+              </>
             )}
             <span className="truncate">{node.name}</span>
           </div>
@@ -348,7 +435,20 @@ export default function EditorPage() {
           </button>
         </div>
 
-        {isDir && node.children && node.children.map((child: any) => renderTreeNode(child, depth + 1))}
+        {isDir && isExpanded && node.children && (
+          <div>
+            {node.children.length === 0 ? (
+              <div
+                style={{ paddingLeft: `${(depth + 1) * 14 + 20}px` }}
+                className="py-0.5 text-[11px] text-gray-500 italic"
+              >
+                (empty folder)
+              </div>
+            ) : (
+              node.children.map((child: any) => renderTreeNode(child, depth + 1))
+            )}
+          </div>
+        )}
       </div>
     );
   };
@@ -451,6 +551,20 @@ export default function EditorPage() {
                 <FolderPlus className="w-3.5 h-3.5" />
               </button>
               <button
+                onClick={collapseAllFolders}
+                className="p-1 hover:text-white text-gray-400 rounded hover:bg-[#1e293b]"
+                title="Collapse All Folders"
+              >
+                <FoldHorizontal className="w-3.5 h-3.5" />
+              </button>
+              <button
+                onClick={expandAllFolders}
+                className="p-1 hover:text-white text-gray-400 rounded hover:bg-[#1e293b]"
+                title="Expand All Folders"
+              >
+                <UnfoldHorizontal className="w-3.5 h-3.5" />
+              </button>
+              <button
                 onClick={() => loadFiles(projectId)}
                 className="p-1 hover:text-white text-gray-400 rounded hover:bg-[#1e293b]"
                 title="Refresh Files"
@@ -460,7 +574,7 @@ export default function EditorPage() {
             </div>
           </div>
 
-          <div className="flex-1 overflow-y-auto p-2 space-y-0.5">
+          <div className="flex-1 overflow-y-auto p-1.5 space-y-0.5">
             {fileTree.length === 0 ? (
               <div className="text-xs text-gray-500 p-3 text-center">
                 Directory empty or loading files for {currentProjectObj?.name}...
@@ -485,7 +599,7 @@ export default function EditorPage() {
                     isActive ? 'bg-[#090d16] text-blue-400 font-medium' : 'text-gray-400 hover:bg-[#131e36]'
                   }`}
                 >
-                  <FileCode className="w-3.5 h-3.5 flex-shrink-0" />
+                  {getFileIcon(tab.name)}
                   <span>{tab.name}</span>
                   {tab.isDirty && <span className="w-2 h-2 rounded-full bg-blue-400" title="Unsaved changes" />}
                   <button

@@ -67,6 +67,20 @@ export interface ProjectRecord {
   status: 'ready' | 'cloning' | 'error';
 }
 
+export interface PullHistoryRecord {
+  id: string;
+  projectId: string;
+  timestamp: string;
+  user: string;
+  fromCommit: string;
+  toCommit: string;
+  branch: string;
+  status: 'active' | 'undone';
+  envProtected: boolean;
+  affectedFiles?: string[];
+  revertedAt?: string;
+}
+
 export interface RequestRecord {
   id: string;
   timestamp: string;
@@ -109,7 +123,8 @@ export interface DatabaseSchema {
     lastLogin?: string;
   }>;
   projects: ProjectRecord[];
-  workspaces?: ProjectRecord[]; // backward compatibility
+  workspaces?: ProjectRecord[];
+  pullHistory?: PullHistoryRecord[];
   securityRules: SecurityRule[];
   ipRecords: IPRecord[];
   securityEvents: SecurityEvent[];
@@ -185,6 +200,7 @@ const DEFAULT_DB: DatabaseSchema = {
       status: 'ready',
     },
   ],
+  pullHistory: [],
   securityRules: [
     {
       id: 'rule_global',
@@ -253,7 +269,6 @@ export function getDatabase(): DatabaseSchema {
       if (!dbCache?.settings) dbCache!.settings = DEFAULT_SETTINGS;
       if (!dbCache?.users) dbCache!.users = DEFAULT_DB.users;
 
-      // Migrate workspaces to projects if upgrading
       if (!dbCache?.projects) {
         if (dbCache?.workspaces && Array.isArray(dbCache.workspaces)) {
           dbCache.projects = dbCache.workspaces.map(w => ({
@@ -265,11 +280,11 @@ export function getDatabase(): DatabaseSchema {
         }
       }
 
-      // Ensure Diet Ghazipur connected project is present if not already added
       if (!dbCache?.projects.some(p => p.id === 'diet-ghazipur' || p.path === '/var/www/diet-website')) {
         dbCache!.projects.unshift(DEFAULT_DB.projects[0]);
       }
 
+      if (!dbCache?.pullHistory) dbCache!.pullHistory = [];
       if (!dbCache?.securityRules) dbCache!.securityRules = DEFAULT_DB.securityRules;
       if (!dbCache?.ipRecords) dbCache!.ipRecords = DEFAULT_DB.ipRecords;
       if (!dbCache?.securityEvents) dbCache!.securityEvents = DEFAULT_DB.securityEvents;
