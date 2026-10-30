@@ -232,11 +232,11 @@ export async function gitPull(workspaceId: string, options: { protectEnv?: boole
 
   // Restore .env backups to guarantee server environment is NOT altered
   if (options.protectEnv !== false && envBackups.size > 0) {
-    for (const [f, content] of envBackups.entries()) {
+    envBackups.forEach((content, f) => {
       try {
         fs.writeFileSync(path.join(projectDir, f), content, 'utf8');
       } catch {}
-    }
+    });
   }
 
   // Get current branch
@@ -315,11 +315,11 @@ export async function gitUndoPull(workspaceId: string, pullId?: string, targetCo
   await git.reset(['--hard', revertTo]);
 
   // Restore .env files
-  for (const [f, content] of envBackups.entries()) {
+  envBackups.forEach((content, f) => {
     try {
       fs.writeFileSync(path.join(projectDir, f), content, 'utf8');
     } catch {}
-  }
+  });
 
   if (record) {
     record.status = 'undone';
