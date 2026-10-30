@@ -52,6 +52,12 @@ function getProjectDir(projectId) {
 
 app.prepare().then(() => {
   const server = createServer(async (req, res) => {
+    // Safety check: ensure response is a valid HTTP ServerResponse
+    if (!res || typeof res.setHeader !== 'function') {
+      if (res && typeof res.end === 'function') res.end();
+      return;
+    }
+
     const parsedUrl = parse(req.url, true);
     // Ignore WebSocket upgrade HTTP requests here so Next.js doesn't error
     if (parsedUrl.pathname && parsedUrl.pathname.startsWith('/api/ws')) {
