@@ -53,7 +53,11 @@ export default function SecurityPage() {
   const [selectedIpRecord, setSelectedIpRecord] = useState<any | null>(null);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
 
+  const inFlight = React.useRef(false);
   const fetchSecurityData = async () => {
+    if (typeof document !== 'undefined' && document.hidden) return;
+    if (inFlight.current) return;
+    inFlight.current = true;
     try {
       const [rRes, ipRes, evRes, reqRes] = await Promise.all([
         fetch('/api/security/rules').then(r => r.json()),
@@ -68,12 +72,14 @@ export default function SecurityPage() {
       if (reqRes) setRequestsData(reqRes);
     } catch (err) {
       console.error(err);
+    } finally {
+      inFlight.current = false;
     }
   };
 
   useEffect(() => {
     fetchSecurityData();
-    const interval = setInterval(fetchSecurityData, 3000);
+    const interval = setInterval(fetchSecurityData, 10000);
     return () => clearInterval(interval);
   }, []);
 

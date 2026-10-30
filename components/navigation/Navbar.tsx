@@ -1,7 +1,6 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import Link from 'next/navigation';
 import { usePathname } from 'next/navigation';
 import {
   Terminal,
@@ -15,9 +14,6 @@ import {
   Search,
   Server,
   ChevronDown,
-  UserCheck,
-  ShieldCheck,
-  Wifi,
 } from 'lucide-react';
 
 export default function Navbar() {
@@ -33,7 +29,6 @@ export default function Navbar() {
   const [userDropdownOpen, setUserDropdownOpen] = useState(false);
 
   useEffect(() => {
-    // Load current user and list of roles
     fetch('/api/auth/me')
       .then((res) => res.json())
       .then((data) => {
@@ -45,10 +40,12 @@ export default function Navbar() {
           setUsers(data.availableUsers);
         }
       })
-      .catch(() => { });
+      .catch(() => {});
 
-    // Polling or websocket for live stats
+    // Low-overhead throttled telemetry check
     const fetchQuickMetrics = () => {
+      if (typeof document !== 'undefined' && document.hidden) return; // Pause when tab is inactive
+
       fetch('/api/monitoring/metrics')
         .then((res) => res.json())
         .then((data) => {
@@ -60,11 +57,12 @@ export default function Navbar() {
             });
           }
         })
-        .catch(() => { });
+        .catch(() => {});
     };
 
     fetchQuickMetrics();
-    const interval = setInterval(fetchQuickMetrics, 4000);
+    // Poll every 12 seconds instead of 4 seconds to eliminate CPU spikes
+    const interval = setInterval(fetchQuickMetrics, 12000);
     return () => clearInterval(interval);
   }, []);
 
@@ -72,7 +70,6 @@ export default function Navbar() {
     setCurrentUserEmail(user.email);
     setCurrentRole(user.role);
     setUserDropdownOpen(false);
-    // Reload or store in sessionStorage
     sessionStorage.setItem('active_user_email', user.email);
     window.location.reload();
   };
@@ -117,10 +114,11 @@ export default function Navbar() {
                 <a
                   key={item.name}
                   href={item.href}
-                  className={`flex items-center space-x-2 px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${isActive
+                  className={`flex items-center space-x-2 px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
+                    isActive
                       ? 'bg-[#1e293b] text-blue-400 border border-blue-500/30'
                       : 'text-gray-300 hover:text-white hover:bg-[#131e36]'
-                    }`}
+                  }`}
                 >
                   <Icon className="w-3.5 h-3.5" />
                   <span>{item.name}</span>
@@ -190,8 +188,9 @@ export default function Navbar() {
                   <button
                     key={u.id}
                     onClick={() => switchUser(u)}
-                    className={`w-full flex items-center justify-between px-3 py-2 hover:bg-[#1e293b] text-left transition-colors ${u.email === currentUserEmail ? 'bg-[#131e36] text-blue-400 font-medium' : 'text-gray-300'
-                      }`}
+                    className={`w-full flex items-center justify-between px-3 py-2 hover:bg-[#1e293b] text-left transition-colors ${
+                      u.email === currentUserEmail ? 'bg-[#131e36] text-blue-400 font-medium' : 'text-gray-300'
+                    }`}
                   >
                     <div>
                       <div>{u.name}</div>
@@ -210,4 +209,3 @@ export default function Navbar() {
     </header>
   );
 }
-

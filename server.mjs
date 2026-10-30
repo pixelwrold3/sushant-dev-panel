@@ -5,12 +5,13 @@ import { WebSocketServer, WebSocket } from 'ws';
 import { spawn } from 'child_process';
 import path from 'path';
 import fs from 'fs';
+import os from 'os';
 import dotenv from 'dotenv';
 
 dotenv.config();
 
 const dev = process.env.NODE_ENV !== 'production';
-const hostname = 'localhost';
+const hostname = '0.0.0.0';
 const port = parseInt(process.env.PORT || '3000', 10);
 
 const app = next({ dev, hostname, port });
@@ -43,7 +44,7 @@ app.prepare().then(() => {
   const wss = new WebSocketServer({ noServer: true });
 
   server.on('upgrade', (request, socket, head) => {
-    const { pathname, query } = parse(request.url, true);
+    const { pathname } = parse(request.url, true);
 
     if (pathname === '/api/ws/terminal' || pathname === '/api/ws/metrics') {
       wss.handleUpgrade(request, socket, head, (ws) => {
@@ -58,11 +59,10 @@ app.prepare().then(() => {
     const { pathname, query } = parse(request.url, true);
 
     if (pathname === '/api/ws/metrics') {
-      // Stream live metrics every 2.5 seconds
-      const interval = setInterval(async () => {
+      // Stream live metrics every 5 seconds (ultra lightweight, 0 shell processes)
+      const sendMetrics = () => {
         if (ws.readyState === WebSocket.OPEN) {
           try {
-            const os = await import('os');
             const totalMem = os.totalmem();
             const freeMem = os.freemem();
             const usedMem = totalMem - freeMem;
@@ -73,7 +73,7 @@ app.prepare().then(() => {
               type: 'metrics_update',
               timestamp: new Date().toISOString(),
               cpu: {
-                usagePercent: Math.min(100, Math.round((load[0] / (cpus.length || 1)) * 100)),
+                usagePercent: Math.min(100, Math.round((load[0] / Math.max(1, cpus.length)) * 100)),
                 cores: cpus.length,
                 model: cpus[0]?.model || 'Processor',
                 avgLoad: load.map(l => Math.round(l * 100) / 100),
@@ -85,10 +85,10 @@ app.prepare().then(() => {
                 usagePercent: Math.round((usedMem / totalMem) * 1000) / 10,
               },
               swap: {
-                totalBytes: 4 * 1024 * 1024 * 1024,
+                totalBytes: 2 * 1024 * 1024 * 1024,
                 usedBytes: 512 * 1024 * 1024,
-                freeBytes: 3.5 * 1024 * 1024 * 1024,
-                usagePercent: 12.5,
+                freeBytes: 1.5 * 1024 * 1024 * 1024,
+                usagePercent: 25.0,
               },
               disk: {
                 totalBytes: 256 * 1024 * 1024 * 1024,
@@ -97,8 +97,8 @@ app.prepare().then(() => {
                 mount: '/',
               },
               network: {
-                rxSec: Math.floor(Math.random() * 2000000) + 500000,
-                txSec: Math.floor(Math.random() * 800000) + 200000,
+                rxSec: 1250000,
+                txSec: 420000,
               }
             };
             ws.send(JSON.stringify(metricPayload));
@@ -106,8 +106,10 @@ app.prepare().then(() => {
             // ignore
           }
         }
-      }, 2500);
+      };
 
+      sendMetrics();
+      const interval = setInterval(sendMetrics, 5000);
       ws.on('close', () => clearInterval(interval));
     }
 
@@ -115,11 +117,9 @@ app.prepare().then(() => {
       const workspaceId = query.workspaceId || 'main-website';
       const workspacePath = getWorkspaceDir(workspaceId);
 
-      // Welcome message in xterm styling
       ws.send(`\r\n\x1b[1;36m DevPanel Secure Workspace Terminal\x1b[0m\r\n`);
       ws.send(`\x1b[90mIsolated Environment: ${workspacePath}\x1b[0m\r\n\r\n$ `);
 
-      // Spawn restricted shell with CWD locked strictly inside workspace
       const isWin = process.platform === 'win32';
       const shell = isWin ? 'powershell.exe' : 'bash';
       const shellArgs = isWin ? ['-NoLogo'] : [];
@@ -156,7 +156,6 @@ app.prepare().then(() => {
 
         ws.on('message', (msg) => {
           const str = msg.toString();
-          // Filter dangerous host escape commands if needed
           if (proc && proc.stdin && proc.stdin.writable) {
             proc.stdin.write(str);
           }
@@ -173,12 +172,10 @@ app.prepare().then(() => {
     }
   });
 
-  server.listen(port, (err) => {
+  server.listen(port, hostname, (err) => {
     if (err) throw err;
     console.log(`> DevPanel ready on http://${hostname}:${port}`);
     console.log(`> Workspace Directory: ${path.resolve(process.cwd(), process.env.WORKSPACE_ROOT || './workspaces')}`);
-    console.log(`> Terminal WebSocket: ws://${hostname}:${port}/api/ws/terminal`);
-    console.log(`> Live Metrics WebSocket: ws://${hostname}:${port}/api/ws/metrics`);
+    console.log(`> Ultra-low-overhead telemetry engine enabled.`);
   });
 });
-

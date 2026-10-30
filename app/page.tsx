@@ -30,7 +30,11 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(true);
   const [actionMessage, setActionMessage] = useState<string | null>(null);
 
+  const inFlight = React.useRef(false);
   const fetchData = async () => {
+    if (typeof document !== 'undefined' && document.hidden) return;
+    if (inFlight.current) return;
+    inFlight.current = true;
     try {
       const [mRes, aRes, sRes, ipRes] = await Promise.all([
         fetch('/api/monitoring/metrics').then(r => r.json()),
@@ -52,12 +56,14 @@ export default function DashboardPage() {
     } catch (err) {
       console.error(err);
       setLoading(false);
+    } finally {
+      inFlight.current = false;
     }
   };
 
   useEffect(() => {
     fetchData();
-    const interval = setInterval(fetchData, 4000);
+    const interval = setInterval(fetchData, 8000);
     return () => clearInterval(interval);
   }, []);
 

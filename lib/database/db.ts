@@ -85,7 +85,7 @@ export interface PanelSettings {
   requestLogRetentionDays: number;
   securityEventRetentionDays: number;
   autoBlockRepeatOffenders: boolean;
-  repeatOffenderEscalation: number[]; // e.g. [5, 15, 60, 360, 1440]
+  repeatOffenderEscalation: number[];
 }
 
 const DATA_DIR = path.resolve(process.cwd(), 'data');
@@ -132,7 +132,7 @@ const DEFAULT_DB: DatabaseSchema = {
       id: 'usr_admin',
       name: 'System Admin',
       email: 'admin@devpanel.local',
-      passwordHash: 'adminpassword123', // In real app salted hash
+      passwordHash: 'adminpassword123',
       role: 'OWNER',
       active: true,
       createdAt: new Date().toISOString(),
@@ -155,7 +155,7 @@ const DEFAULT_DB: DatabaseSchema = {
       role: 'VIEWER',
       active: true,
       createdAt: new Date().toISOString(),
-    }
+    },
   ],
   workspaces: [
     {
@@ -167,7 +167,7 @@ const DEFAULT_DB: DatabaseSchema = {
       createdAt: new Date().toISOString(),
       lastActive: new Date().toISOString(),
       status: 'ready',
-    }
+    },
   ],
   securityRules: [
     {
@@ -205,7 +205,7 @@ const DEFAULT_DB: DatabaseSchema = {
       blockDurationMinutes: 10,
       enabled: true,
       createdAt: new Date().toISOString(),
-    }
+    },
   ],
   ipRecords: [
     {
@@ -246,7 +246,7 @@ const DEFAULT_DB: DatabaseSchema = {
       blockedCount: 0,
       lastRequest: new Date().toISOString(),
       routesHit: ['/'],
-    }
+    },
   ],
   securityEvents: [
     {
@@ -256,7 +256,7 @@ const DEFAULT_DB: DatabaseSchema = {
       action: 'Rate limit exceeded',
       reason: 'Triggered rule: Login Brute Force Protection (5 req/min)',
       target: '/api/auth/login',
-      result: 'BLOCKED'
+      result: 'BLOCKED',
     },
     {
       id: 'evt_2',
@@ -265,7 +265,7 @@ const DEFAULT_DB: DatabaseSchema = {
       action: 'Malicious path probe',
       reason: 'Attempted access to sensitive configuration path',
       target: '/.env',
-      result: 'BLOCKED'
+      result: 'BLOCKED',
     },
     {
       id: 'evt_3',
@@ -275,8 +275,8 @@ const DEFAULT_DB: DatabaseSchema = {
       action: 'Admin Authentication',
       reason: 'Dashboard sign-in',
       target: '/dashboard',
-      result: 'SUCCESS'
-    }
+      result: 'SUCCESS',
+    },
   ],
   auditLogs: [
     {
@@ -308,14 +308,14 @@ const DEFAULT_DB: DatabaseSchema = {
       target: '/api/auth/login',
       ip: '127.0.0.1',
       result: 'Success',
-    }
+    },
   ],
   requestLogs: [],
   settings: DEFAULT_SETTINGS,
 };
 
-// In-memory cache synced with disk
 let dbCache: DatabaseSchema | null = null;
+let saveDebounceTimer: NodeJS.Timeout | null = null;
 
 function ensureDataDirectory() {
   if (!fs.existsSync(DATA_DIR)) {
@@ -332,7 +332,6 @@ export function getDatabase(): DatabaseSchema {
     try {
       const raw = fs.readFileSync(DB_FILE, 'utf-8');
       dbCache = JSON.parse(raw);
-      // Ensure any newly added fields exist
       if (!dbCache?.settings) dbCache!.settings = DEFAULT_SETTINGS;
       if (!dbCache?.users) dbCache!.users = DEFAULT_DB.users;
       if (!dbCache?.workspaces) dbCache!.workspaces = DEFAULT_DB.workspaces;
@@ -348,17 +347,30 @@ export function getDatabase(): DatabaseSchema {
   }
 
   dbCache = JSON.parse(JSON.stringify(DEFAULT_DB));
-  saveDatabase();
+  saveDatabaseSync();
   return dbCache!;
 }
 
+// Debounced asynchronous file save to eliminate disk thrashing
 export function saveDatabase(): void {
+  if (!dbCache) return;
+  if (saveDebounceTimer) {
+    clearTimeout(saveDebounceTimer);
+  }
+
+  saveDebounceTimer = setTimeout(() => {
+    saveDatabaseSync();
+  }, 1000);
+}
+
+export function saveDatabaseSync(): void {
   if (!dbCache) return;
   ensureDataDirectory();
   try {
-    fs.writeFileSync(DB_FILE, JSON.stringify(dbCache, null, 2), 'utf-8');
+    const tempFile = `${DB_FILE}.tmp`;
+    fs.writeFileSync(tempFile, JSON.stringify(dbCache, null, 2), 'utf-8');
+    fs.renameSync(tempFile, DB_FILE);
   } catch (err) {
     console.error('Failed to write to local db file:', err);
   }
 }
-

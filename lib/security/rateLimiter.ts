@@ -16,12 +16,20 @@ export interface CheckResult {
   ruleName?: string;
 }
 
+let lastCleanupTime = 0;
+const CLEANUP_INTERVAL_MS = 60000;
+
 /**
- * Clean up expired temporary IP blocks periodically
+ * Clean up expired temporary IP blocks periodically (throttled to at most once a minute)
  */
 export function cleanupExpiredBlocks() {
+  const now = Date.now();
+  if (now - lastCleanupTime < CLEANUP_INTERVAL_MS) {
+    return;
+  }
+  lastCleanupTime = now;
+
   const db = getDatabase();
-  const now = new Date().getTime();
   let modified = false;
 
   for (const record of db.ipRecords) {
@@ -30,7 +38,6 @@ export function cleanupExpiredBlocks() {
       if (exp <= now) {
         record.status = 'expired';
         modified = true;
-        // Log security event for unblocking
         db.securityEvents.unshift({
           id: `evt_${Date.now()}_${Math.random().toString(36).substring(7)}`,
           timestamp: new Date().toISOString(),
@@ -88,7 +95,6 @@ export function checkRequest(ip: string, method: string, route: string): CheckRe
     const activeRules = db.securityRules.filter(r => r.enabled);
 
     for (const rule of activeRules) {
-      // Check route match (* or prefix or exact)
       const routeMatches = rule.route === '*' || route === rule.route || (rule.route.endsWith('/*') && route.startsWith(rule.route.slice(0, -2)));
       const methodMatches = rule.method === 'ALL' || rule.method.toUpperCase() === method.toUpperCase();
 
@@ -107,7 +113,6 @@ export function checkRequest(ip: string, method: string, route: string): CheckRe
         if (tracker.timestamps.length > rule.threshold) {
           tracker.violations += 1;
 
-          // Determine block duration (apply escalation if enabled)
           let blockMins = rule.blockDurationMinutes;
           if (settings.autoBlockRepeatOffenders && settings.repeatOffenderEscalation.length > 0) {
             const index = Math.min(tracker.violations - 1, settings.repeatOffenderEscalation.length - 1);
@@ -116,7 +121,6 @@ export function checkRequest(ip: string, method: string, route: string): CheckRe
 
           const expiresAt = blockMins > 0 ? new Date(now + blockMins * 60 * 1000).toISOString() : null;
 
-          // Block the IP
           let ipRec = db.ipRecords.find(r => r.ip === ip);
           if (ipRec) {
             ipRec.status = 'active';
@@ -141,7 +145,6 @@ export function checkRequest(ip: string, method: string, route: string): CheckRe
             });
           }
 
-          // Record Security Event
           db.securityEvents.unshift({
             id: `evt_${Date.now()}_${Math.random().toString(36).substring(7)}`,
             timestamp: new Date().toISOString(),
@@ -187,9 +190,7 @@ export function recordRequestLog(ip: string, method: string, route: string, stat
 
   db.requestLogs.unshift(entry);
 
-  // Keep rolling request log bounded in memory (last 500)
-  if (db.requestLogs.length > 500) {
-    db.requestLogs = db.requestLogs.slice(0, 500);
+  if (db.requestLogs.length > 300) {
+    db.requestLogs = db.requestLogs.slice(0, 300);
   }
 }
-

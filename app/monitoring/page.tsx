@@ -29,7 +29,11 @@ export default function MonitoringPage() {
   const [actionLogModal, setActionLogModal] = useState<{ open: boolean; title: string; content: string } | null>(null);
   const [statusMsg, setStatusMsg] = useState<string | null>(null);
 
+  const inFlight = React.useRef(false);
   const fetchMonitoringData = async () => {
+    if (typeof document !== 'undefined' && document.hidden) return;
+    if (inFlight.current) return;
+    inFlight.current = true;
     try {
       const [mRes, pRes, sRes] = await Promise.all([
         fetch('/api/monitoring/metrics').then(r => r.json()),
@@ -45,12 +49,14 @@ export default function MonitoringPage() {
     } catch (err) {
       console.error(err);
       setLoading(false);
+    } finally {
+      inFlight.current = false;
     }
   };
 
   useEffect(() => {
     fetchMonitoringData();
-    const interval = setInterval(fetchMonitoringData, 3500);
+    const interval = setInterval(fetchMonitoringData, 8000);
     return () => clearInterval(interval);
   }, []);
 

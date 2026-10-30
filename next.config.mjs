@@ -2,7 +2,7 @@
 const nextConfig = {
   reactStrictMode: false,
   experimental: {
-    serverComponentsExternalPackages: ['systeminformation', 'simple-git'],
+    serverComponentsExternalPackages: ['simple-git'],
   },
   webpack: (config) => {
     config.resolve.fallback = {
