@@ -1,9 +1,8 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { usePathname } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import {
-  Terminal,
   FileCode,
   GitBranch,
   ShieldAlert,
@@ -14,10 +13,14 @@ import {
   Search,
   Server,
   ChevronDown,
+  LogOut,
+  FolderGit2,
+  Plus,
 } from 'lucide-react';
 
 export default function Navbar() {
   const pathname = usePathname();
+  const router = useRouter();
   const [currentUserEmail, setCurrentUserEmail] = useState('admin@devpanel.local');
   const [currentRole, setCurrentRole] = useState('OWNER');
   const [users, setUsers] = useState<any[]>([]);
@@ -28,28 +31,44 @@ export default function Navbar() {
   });
   const [userDropdownOpen, setUserDropdownOpen] = useState(false);
 
+  // If on login page, don't show full navigation
+  const isLoginPage = pathname === '/login';
+
   useEffect(() => {
+    if (isLoginPage) return;
+
     fetch('/api/auth/me')
-      .then((res) => res.json())
+      .then((res) => {
+        if (res.status === 401) {
+          router.push('/login');
+          return null;
+        }
+        return res.json();
+      })
       .then((data) => {
-        if (data.user) {
+        if (data?.user) {
           setCurrentUserEmail(data.user.email);
           setCurrentRole(data.user.role);
         }
-        if (data.availableUsers) {
+        if (data?.availableUsers) {
           setUsers(data.availableUsers);
         }
       })
       .catch(() => {});
 
-    // Low-overhead throttled telemetry check
     const fetchQuickMetrics = () => {
-      if (typeof document !== 'undefined' && document.hidden) return; // Pause when tab is inactive
+      if (typeof document !== 'undefined' && document.hidden) return;
 
       fetch('/api/monitoring/metrics')
-        .then((res) => res.json())
+        .then((res) => {
+          if (res.status === 401) {
+            router.push('/login');
+            return null;
+          }
+          return res.json();
+        })
         .then((data) => {
-          if (data.current) {
+          if (data?.current) {
             setMetrics({
               cpu: data.current.cpu?.usagePercent || 24,
               mem: data.current.memory?.usagePercent || 41,
@@ -61,17 +80,17 @@ export default function Navbar() {
     };
 
     fetchQuickMetrics();
-    // Poll every 12 seconds instead of 4 seconds to eliminate CPU spikes
     const interval = setInterval(fetchQuickMetrics, 12000);
     return () => clearInterval(interval);
-  }, []);
+  }, [isLoginPage, router]);
 
-  const switchUser = (user: any) => {
-    setCurrentUserEmail(user.email);
-    setCurrentRole(user.role);
-    setUserDropdownOpen(false);
-    sessionStorage.setItem('active_user_email', user.email);
-    window.location.reload();
+  const handleLogout = async () => {
+    try {
+      await fetch('/api/auth/logout', { method: 'POST' });
+    } catch {}
+    localStorage.removeItem('devpanel_session_token');
+    router.push('/login');
+    router.refresh();
   };
 
   const navLinks = [
@@ -84,6 +103,8 @@ export default function Navbar() {
     { name: 'Team', href: '/team', icon: Users },
     { name: 'Settings', href: '/settings', icon: Settings },
   ];
+
+  if (isLoginPage) return null;
 
   return (
     <header className="sticky top-0 z-40 w-full border-b border-[#1e293b] bg-[#090d16]/90 backdrop-blur-md">
@@ -162,7 +183,7 @@ export default function Navbar() {
             </kbd>
           </button>
 
-          {/* User & Role Switcher */}
+          {/* User Profile & Logout */}
           <div className="relative">
             <button
               onClick={() => setUserDropdownOpen(!userDropdownOpen)}
@@ -179,28 +200,18 @@ export default function Navbar() {
             </button>
 
             {userDropdownOpen && (
-              <div className="absolute right-0 mt-2 w-56 rounded-lg bg-[#0f172a] border border-[#1e293b] shadow-xl py-1 z-50 text-xs">
+              <div className="absolute right-0 mt-2 w-52 rounded-lg bg-[#0f172a] border border-[#1e293b] shadow-xl py-1 z-50 text-xs">
                 <div className="px-3 py-2 border-b border-[#1e293b]">
-                  <div className="font-semibold text-gray-200">Test Role Switcher</div>
-                  <div className="text-[11px] text-gray-400">Verify server-side RBAC enforcement</div>
+                  <div className="font-semibold text-gray-200">{currentUserEmail}</div>
+                  <div className="text-[11px] text-emerald-400">Session Active (Saved)</div>
                 </div>
-                {users.map((u) => (
-                  <button
-                    key={u.id}
-                    onClick={() => switchUser(u)}
-                    className={`w-full flex items-center justify-between px-3 py-2 hover:bg-[#1e293b] text-left transition-colors ${
-                      u.email === currentUserEmail ? 'bg-[#131e36] text-blue-400 font-medium' : 'text-gray-300'
-                    }`}
-                  >
-                    <div>
-                      <div>{u.name}</div>
-                      <div className="text-[10px] text-gray-400">{u.email}</div>
-                    </div>
-                    <span className="px-1.5 py-0.5 rounded text-[10px] font-mono bg-blue-500/10 text-blue-400 border border-blue-500/20">
-                      {u.role}
-                    </span>
-                  </button>
-                ))}
+                <button
+                  onClick={handleLogout}
+                  className="w-full flex items-center space-x-2 px-3 py-2 text-rose-400 hover:bg-[#1e293b] text-left transition-colors font-medium"
+                >
+                  <LogOut className="w-4 h-4" />
+                  <span>Log Out</span>
+                </button>
               </div>
             )}
           </div>

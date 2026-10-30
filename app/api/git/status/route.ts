@@ -7,13 +7,13 @@ export async function GET(req: NextRequest) {
     req,
     async (r) => {
       const { searchParams } = new URL(req.url);
-      const workspaceId = searchParams.get('workspaceId') || 'main-website';
+      const projectId = searchParams.get('projectId') || searchParams.get('workspaceId') || 'diet-ghazipur';
 
-      await initOrCheckGit(workspaceId);
+      await initOrCheckGit(projectId);
       const [status, branches, commits] = await Promise.all([
-        getGitStatus(workspaceId),
-        getBranches(workspaceId).catch(() => ({ all: ['main'], current: 'main' })),
-        getCommitHistory(workspaceId, 15),
+        getGitStatus(projectId),
+        getBranches(projectId).catch(() => ({ all: ['main'], current: 'main' })),
+        getCommitHistory(projectId, 15),
       ]);
 
       return NextResponse.json({
@@ -25,4 +25,3 @@ export async function GET(req: NextRequest) {
     'git_read'
   );
 }
-

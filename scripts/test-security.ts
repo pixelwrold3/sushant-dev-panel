@@ -57,7 +57,7 @@ runTest('Workspace Sanitization: blocks malicious workspace id (traversal)', () 
     () => {
       resolveWorkspacePath('..', 'file.txt');
     },
-    /Invalid workspace identifier/
+    /Invalid project identifier|Invalid workspace identifier/
   );
 });
 

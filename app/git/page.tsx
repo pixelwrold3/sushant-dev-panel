@@ -19,7 +19,7 @@ import {
 } from 'lucide-react';
 
 export default function GitPage() {
-  const [workspaceId, setWorkspaceId] = useState('main-website');
+  const [workspaceId, setWorkspaceId] = useState('diet-ghazipur');
   const [workspaces, setWorkspaces] = useState<any[]>([]);
   const [gitStatus, setGitStatus] = useState<any>(null);
   const [commitMessage, setCommitMessage] = useState('');
@@ -43,10 +43,10 @@ export default function GitPage() {
   };
 
   useEffect(() => {
-    fetch('/api/workspaces')
+    fetch('/api/projects')
       .then((r) => r.json())
       .then((d) => {
-        if (d.workspaces) {
+        if (d.projects) {
           setWorkspaces(d.workspaces);
           if (d.workspaces.length > 0) {
             setWorkspaceId(d.workspaces[0].id);
@@ -159,7 +159,7 @@ export default function GitPage() {
           >
             {workspaces.map((w) => (
               <option key={w.id} value={w.id}>
-                Workspace: {w.name}
+                Project: {w.name}
               </option>
             ))}
           </select>

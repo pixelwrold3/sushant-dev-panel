@@ -50,12 +50,18 @@ export interface AuditLog {
   result: 'Success' | 'Failure' | 'Warning';
 }
 
-export interface WorkspaceRecord {
+export interface ProjectRecord {
   id: string;
   name: string;
+  type: 'connected' | 'sandbox';
+  path: string; // Absolute directory on the server e.g. /var/www/diet-website
   repoUrl?: string;
   branch: string;
-  path: string;
+  runtime?: 'Node.js' | 'Python' | 'Docker' | 'Static' | 'Other';
+  buildCommand?: string;
+  restartCommand?: string;
+  systemdService?: string;
+  autoStart?: boolean;
   createdAt: string;
   lastActive: string;
   status: 'ready' | 'cloning' | 'error';
@@ -91,7 +97,7 @@ export interface PanelSettings {
 const DATA_DIR = path.resolve(process.cwd(), 'data');
 const DB_FILE = path.join(DATA_DIR, 'local-db.json');
 
-interface DatabaseSchema {
+export interface DatabaseSchema {
   users: Array<{
     id: string;
     name: string;
@@ -102,7 +108,8 @@ interface DatabaseSchema {
     createdAt: string;
     lastLogin?: string;
   }>;
-  workspaces: WorkspaceRecord[];
+  projects: ProjectRecord[];
+  workspaces?: ProjectRecord[]; // backward compatibility
   securityRules: SecurityRule[];
   ipRecords: IPRecord[];
   securityEvents: SecurityEvent[];
@@ -117,7 +124,7 @@ const DEFAULT_SETTINGS: PanelSettings = {
   auditLogsEnabled: true,
   secureHeadersEnabled: true,
   loginProtectionEnabled: true,
-  sessionTimeoutMinutes: 60,
+  sessionTimeoutMinutes: 1440,
   maxLoginAttempts: 5,
   loginLockoutMinutes: 15,
   requestLogRetentionDays: 7,
@@ -147,23 +154,32 @@ const DEFAULT_DB: DatabaseSchema = {
       active: true,
       createdAt: new Date().toISOString(),
     },
-    {
-      id: 'usr_viewer',
-      name: 'Auditor',
-      email: 'viewer@devpanel.local',
-      passwordHash: 'viewpassword123',
-      role: 'VIEWER',
-      active: true,
-      createdAt: new Date().toISOString(),
-    },
   ],
-  workspaces: [
+  projects: [
+    {
+      id: 'diet-ghazipur',
+      name: 'Diet Ghazipur',
+      type: 'connected',
+      path: '/var/www/diet-website',
+      repoUrl: 'https://github.com/diet-ghazipur/diet-website.git',
+      branch: 'main',
+      runtime: 'Node.js',
+      buildCommand: 'npm run build',
+      restartCommand: 'systemctl restart diet-website',
+      systemdService: 'diet-website',
+      autoStart: true,
+      createdAt: new Date().toISOString(),
+      lastActive: new Date().toISOString(),
+      status: 'ready',
+    },
     {
       id: 'main-website',
-      name: 'Main Application Project',
-      repoUrl: 'https://github.com/example/main-website.git',
+      name: 'Sandbox Project',
+      type: 'sandbox',
+      path: './workspaces/main-website',
       branch: 'main',
-      path: 'main-website',
+      runtime: 'Node.js',
+      buildCommand: 'npm run build',
       createdAt: new Date().toISOString(),
       lastActive: new Date().toISOString(),
       status: 'ready',
@@ -194,48 +210,10 @@ const DEFAULT_DB: DatabaseSchema = {
       enabled: true,
       createdAt: new Date().toISOString(),
     },
-    {
-      id: 'rule_api_heavy',
-      name: 'API Abuse Protection',
-      route: '/api/*',
-      method: 'ALL',
-      threshold: 60,
-      windowSeconds: 60,
-      action: 'throttle',
-      blockDurationMinutes: 10,
-      enabled: true,
-      createdAt: new Date().toISOString(),
-    },
   ],
   ipRecords: [
     {
       id: 'ip_1',
-      ip: '185.220.101.5',
-      type: 'temporary',
-      reason: 'Rate limit violation on /api/login',
-      status: 'active',
-      createdAt: new Date(Date.now() - 1000 * 60 * 12).toISOString(),
-      expiresAt: new Date(Date.now() + 1000 * 60 * 18).toISOString(),
-      requestCount: 420,
-      blockedCount: 45,
-      lastRequest: new Date().toISOString(),
-      routesHit: ['/api/login', '/admin'],
-    },
-    {
-      id: 'ip_2',
-      ip: '103.145.74.12',
-      type: 'permanent',
-      reason: 'Automated vulnerability scanner probing /wp-admin',
-      status: 'active',
-      createdAt: new Date(Date.now() - 1000 * 60 * 60 * 24).toISOString(),
-      expiresAt: null,
-      requestCount: 1890,
-      blockedCount: 1890,
-      lastRequest: new Date().toISOString(),
-      routesHit: ['/wp-admin', '/.env', '/config.json'],
-    },
-    {
-      id: 'ip_3',
       ip: '127.0.0.1',
       type: 'allowlist',
       reason: 'Localhost / Admin machine',
@@ -248,68 +226,8 @@ const DEFAULT_DB: DatabaseSchema = {
       routesHit: ['/'],
     },
   ],
-  securityEvents: [
-    {
-      id: 'evt_1',
-      timestamp: new Date(Date.now() - 1000 * 60 * 5).toISOString(),
-      ip: '185.220.101.5',
-      action: 'Rate limit exceeded',
-      reason: 'Triggered rule: Login Brute Force Protection (5 req/min)',
-      target: '/api/auth/login',
-      result: 'BLOCKED',
-    },
-    {
-      id: 'evt_2',
-      timestamp: new Date(Date.now() - 1000 * 60 * 22).toISOString(),
-      ip: '103.145.74.12',
-      action: 'Malicious path probe',
-      reason: 'Attempted access to sensitive configuration path',
-      target: '/.env',
-      result: 'BLOCKED',
-    },
-    {
-      id: 'evt_3',
-      timestamp: new Date(Date.now() - 1000 * 60 * 45).toISOString(),
-      ip: '127.0.0.1',
-      user: 'admin@devpanel.local',
-      action: 'Admin Authentication',
-      reason: 'Dashboard sign-in',
-      target: '/dashboard',
-      result: 'SUCCESS',
-    },
-  ],
-  auditLogs: [
-    {
-      id: 'aud_1',
-      timestamp: new Date(Date.now() - 1000 * 60 * 2).toISOString(),
-      user: 'admin@devpanel.local',
-      action: 'IP Blocked',
-      details: 'Temporarily blocked 185.220.101.5 for 30 minutes',
-      target: '185.220.101.5',
-      ip: '127.0.0.1',
-      result: 'Success',
-    },
-    {
-      id: 'aud_2',
-      timestamp: new Date(Date.now() - 1000 * 60 * 18).toISOString(),
-      user: 'lead@devpanel.local',
-      action: 'Git Push',
-      details: 'Pushed commit to branch main (feat: authentication middleware)',
-      target: 'main-website',
-      ip: '127.0.0.1',
-      result: 'Success',
-    },
-    {
-      id: 'aud_3',
-      timestamp: new Date(Date.now() - 1000 * 60 * 35).toISOString(),
-      user: 'admin@devpanel.local',
-      action: 'Security Rule Created',
-      details: 'Added rule "Login Brute Force Protection"',
-      target: '/api/auth/login',
-      ip: '127.0.0.1',
-      result: 'Success',
-    },
-  ],
+  securityEvents: [],
+  auditLogs: [],
   requestLogs: [],
   settings: DEFAULT_SETTINGS,
 };
@@ -334,7 +252,24 @@ export function getDatabase(): DatabaseSchema {
       dbCache = JSON.parse(raw);
       if (!dbCache?.settings) dbCache!.settings = DEFAULT_SETTINGS;
       if (!dbCache?.users) dbCache!.users = DEFAULT_DB.users;
-      if (!dbCache?.workspaces) dbCache!.workspaces = DEFAULT_DB.workspaces;
+
+      // Migrate workspaces to projects if upgrading
+      if (!dbCache?.projects) {
+        if (dbCache?.workspaces && Array.isArray(dbCache.workspaces)) {
+          dbCache.projects = dbCache.workspaces.map(w => ({
+            ...w,
+            type: w.type || (w.path.startsWith('/') ? 'connected' : 'sandbox'),
+          }));
+        } else {
+          dbCache!.projects = DEFAULT_DB.projects;
+        }
+      }
+
+      // Ensure Diet Ghazipur connected project is present if not already added
+      if (!dbCache?.projects.some(p => p.id === 'diet-ghazipur' || p.path === '/var/www/diet-website')) {
+        dbCache!.projects.unshift(DEFAULT_DB.projects[0]);
+      }
+
       if (!dbCache?.securityRules) dbCache!.securityRules = DEFAULT_DB.securityRules;
       if (!dbCache?.ipRecords) dbCache!.ipRecords = DEFAULT_DB.ipRecords;
       if (!dbCache?.securityEvents) dbCache!.securityEvents = DEFAULT_DB.securityEvents;
@@ -351,7 +286,6 @@ export function getDatabase(): DatabaseSchema {
   return dbCache!;
 }
 
-// Debounced asynchronous file save to eliminate disk thrashing
 export function saveDatabase(): void {
   if (!dbCache) return;
   if (saveDebounceTimer) {

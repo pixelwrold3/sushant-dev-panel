@@ -12,15 +12,38 @@ dotenv.config();
 
 const dev = process.env.NODE_ENV !== 'production';
 const hostname = '0.0.0.0';
-const port = parseInt(process.env.PORT || '3000', 10);
+const port = parseInt(process.env.PORT || '62244', 10);
 
 const app = next({ dev, hostname, port });
 const handle = app.getRequestHandler();
 
-// Safe workspace directory resolver
-function getWorkspaceDir(workspaceId) {
+// Get the database schema directly to find registered projects
+function getProjectDir(projectId) {
+  const dbFile = path.resolve(process.cwd(), 'data', 'local-db.json');
+  if (fs.existsSync(dbFile)) {
+    try {
+      const db = JSON.parse(fs.readFileSync(dbFile, 'utf8'));
+      const found = db.projects?.find((p) => p.id === projectId);
+      if (found) {
+        if (found.type === 'connected') {
+          const resolved = path.resolve(found.path);
+          if (fs.existsSync(resolved)) return resolved;
+        } else {
+          const root = process.env.WORKSPACE_ROOT || './workspaces';
+          const wsPath = path.resolve(process.cwd(), root, projectId);
+          if (fs.existsSync(wsPath)) return wsPath;
+        }
+      }
+    } catch {}
+  }
+
+  // Fallback to diet-website if it exists
+  if (projectId === 'diet-ghazipur' && fs.existsSync('/var/www/diet-website')) {
+    return '/var/www/diet-website';
+  }
+
   const root = process.env.WORKSPACE_ROOT || './workspaces';
-  const cleanId = (workspaceId || 'main-website').replace(/[^a-zA-Z0-9_\-\.]/g, '');
+  const cleanId = (projectId || 'main-website').replace(/[^a-zA-Z0-9_\-\.]/g, '');
   const dir = path.resolve(process.cwd(), root, cleanId);
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
@@ -40,7 +63,6 @@ app.prepare().then(() => {
     }
   });
 
-  // Attach WebSocket Server
   const wss = new WebSocketServer({ noServer: true });
 
   server.on('upgrade', (request, socket, head) => {
@@ -59,7 +81,6 @@ app.prepare().then(() => {
     const { pathname, query } = parse(request.url, true);
 
     if (pathname === '/api/ws/metrics') {
-      // Stream live metrics every 5 seconds (ultra lightweight, 0 shell processes)
       const sendMetrics = () => {
         if (ws.readyState === WebSocket.OPEN) {
           try {
@@ -114,11 +135,12 @@ app.prepare().then(() => {
     }
 
     if (pathname === '/api/ws/terminal') {
-      const workspaceId = query.workspaceId || 'main-website';
-      const workspacePath = getWorkspaceDir(workspaceId);
+      const targetProject = query.projectId || query.workspaceId || 'diet-ghazipur';
+      const projectPath = getProjectDir(targetProject);
 
-      ws.send(`\r\n\x1b[1;36m DevPanel Secure Workspace Terminal\x1b[0m\r\n`);
-      ws.send(`\x1b[90mIsolated Environment: ${workspacePath}\x1b[0m\r\n\r\n$ `);
+      ws.send(`\r\n\x1b[1;36m DevPanel Project Terminal\x1b[0m\r\n`);
+      ws.send(`\x1b[90mActive Project: ${targetProject}\x1b[0m\r\n`);
+      ws.send(`\x1b[90mTarget Directory: ${projectPath}\x1b[0m\r\n\r\n$ `);
 
       const isWin = process.platform === 'win32';
       const shell = isWin ? 'powershell.exe' : 'bash';
@@ -127,7 +149,7 @@ app.prepare().then(() => {
       let proc;
       try {
         proc = spawn(shell, shellArgs, {
-          cwd: workspacePath,
+          cwd: projectPath,
           env: {
             ...process.env,
             WORKSPACE_ISOLATED: 'true',
@@ -175,7 +197,6 @@ app.prepare().then(() => {
   server.listen(port, hostname, (err) => {
     if (err) throw err;
     console.log(`> DevPanel ready on http://${hostname}:${port}`);
-    console.log(`> Workspace Directory: ${path.resolve(process.cwd(), process.env.WORKSPACE_ROOT || './workspaces')}`);
-    console.log(`> Ultra-low-overhead telemetry engine enabled.`);
+    console.log(`> Connected Project Targeting Enabled (/var/www/diet-website supported)`);
   });
 });

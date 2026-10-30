@@ -1,0 +1,19 @@
+[Unit]
+Description=DevPanel Unified Server Management Engine
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/var/www/sushant-dev-panel
+Environment=NODE_ENV=production
+Environment=PORT=62244
+ExecStart=/usr/bin/node --max-old-space-size=256 /var/www/sushant-dev-panel/server.mjs
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+

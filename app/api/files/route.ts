@@ -14,17 +14,15 @@ export async function GET(req: NextRequest) {
     req,
     async (r) => {
       const { searchParams } = new URL(req.url);
-      const workspaceId = searchParams.get('workspaceId') || 'main-website';
+      const projectId = searchParams.get('projectId') || searchParams.get('workspaceId') || 'diet-ghazipur';
       const filePath = searchParams.get('path');
 
       try {
         if (filePath !== null && filePath !== undefined && filePath !== '') {
-          // Read specific file content
-          const content = readWorkspaceFile(workspaceId, filePath);
+          const content = readWorkspaceFile(projectId, filePath);
           return NextResponse.json({ content, path: filePath });
         } else {
-          // List directory tree
-          const tree = listWorkspaceFiles(workspaceId);
+          const tree = listWorkspaceFiles(projectId);
           return NextResponse.json({ files: tree });
         }
       } catch (err: any) {
@@ -40,16 +38,17 @@ export async function PUT(req: NextRequest) {
     req,
     async (r, user) => {
       const body = await req.json();
-      const { workspaceId, path, content } = body;
+      const { projectId, workspaceId, path, content } = body;
+      const targetId = projectId || workspaceId || 'diet-ghazipur';
 
-      if (!workspaceId || !path || content === undefined) {
-        return NextResponse.json({ error: 'Missing workspaceId, path, or content' }, { status: 400 });
+      if (!targetId || !path || content === undefined) {
+        return NextResponse.json({ error: 'Missing projectId, path, or content' }, { status: 400 });
       }
 
       try {
-        writeWorkspaceFile(workspaceId, path, content);
+        writeWorkspaceFile(targetId, path, content);
         const ip = getClientIp(req);
-        logAudit(user.email, 'File Saved', `Saved changes to ${path}`, `${workspaceId}/${path}`, ip, 'Success');
+        logAudit(user.email, 'File Saved', `Saved changes to ${path}`, `${targetId}/${path}`, ip, 'Success');
         return NextResponse.json({ success: true, message: 'File saved successfully' });
       } catch (err: any) {
         return NextResponse.json({ error: err.message }, { status: 400 });
@@ -64,20 +63,21 @@ export async function POST(req: NextRequest) {
     req,
     async (r, user) => {
       const body = await req.json();
-      const { workspaceId, path, isDirectory } = body;
+      const { projectId, workspaceId, path, isDirectory } = body;
+      const targetId = projectId || workspaceId || 'diet-ghazipur';
 
-      if (!workspaceId || !path) {
-        return NextResponse.json({ error: 'workspaceId and path are required' }, { status: 400 });
+      if (!targetId || !path) {
+        return NextResponse.json({ error: 'projectId and path are required' }, { status: 400 });
       }
 
       try {
-        createWorkspaceItem(workspaceId, path, !!isDirectory);
+        createWorkspaceItem(targetId, path, !!isDirectory);
         const ip = getClientIp(req);
         logAudit(
           user.email,
           isDirectory ? 'Folder Created' : 'File Created',
           `Created ${isDirectory ? 'directory' : 'file'} at ${path}`,
-          `${workspaceId}/${path}`,
+          `${targetId}/${path}`,
           ip,
           'Success'
         );
@@ -95,16 +95,17 @@ export async function PATCH(req: NextRequest) {
     req,
     async (r, user) => {
       const body = await req.json();
-      const { workspaceId, oldPath, newPath } = body;
+      const { projectId, workspaceId, oldPath, newPath } = body;
+      const targetId = projectId || workspaceId || 'diet-ghazipur';
 
-      if (!workspaceId || !oldPath || !newPath) {
+      if (!targetId || !oldPath || !newPath) {
         return NextResponse.json({ error: 'Missing parameters for rename' }, { status: 400 });
       }
 
       try {
-        renameWorkspaceItem(workspaceId, oldPath, newPath);
+        renameWorkspaceItem(targetId, oldPath, newPath);
         const ip = getClientIp(req);
-        logAudit(user.email, 'File Renamed', `Renamed ${oldPath} to ${newPath}`, `${workspaceId}/${newPath}`, ip, 'Success');
+        logAudit(user.email, 'File Renamed', `Renamed ${oldPath} to ${newPath}`, `${targetId}/${newPath}`, ip, 'Success');
         return NextResponse.json({ success: true });
       } catch (err: any) {
         return NextResponse.json({ error: err.message }, { status: 400 });
@@ -119,16 +120,17 @@ export async function DELETE(req: NextRequest) {
     req,
     async (r, user) => {
       const body = await req.json();
-      const { workspaceId, path } = body;
+      const { projectId, workspaceId, path } = body;
+      const targetId = projectId || workspaceId || 'diet-ghazipur';
 
-      if (!workspaceId || !path) {
-        return NextResponse.json({ error: 'workspaceId and path are required' }, { status: 400 });
+      if (!targetId || !path) {
+        return NextResponse.json({ error: 'projectId and path are required' }, { status: 400 });
       }
 
       try {
-        deleteWorkspaceItem(workspaceId, path);
+        deleteWorkspaceItem(targetId, path);
         const ip = getClientIp(req);
-        logAudit(user.email, 'File Deleted', `Deleted ${path}`, `${workspaceId}/${path}`, ip, 'Success');
+        logAudit(user.email, 'File Deleted', `Deleted ${path}`, `${targetId}/${path}`, ip, 'Success');
         return NextResponse.json({ success: true });
       } catch (err: any) {
         return NextResponse.json({ error: err.message }, { status: 400 });
@@ -137,4 +139,3 @@ export async function DELETE(req: NextRequest) {
     'create_delete_files'
   );
 }
-

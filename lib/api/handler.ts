@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { checkRequest, recordRequestLog } from '../security/rateLimiter';
 import { getCurrentUser } from '../auth/session';
-import { PermissionAction, hasPermission } from '../auth/rbac';
+import { PermissionAction, hasPermission, User } from '../auth/rbac';
 import { getDatabase, saveDatabase } from '../database/db';
 
 export function getClientIp(req: NextRequest): string {
@@ -31,14 +31,14 @@ export function logAudit(user: string, action: string, details: string, target?:
 
 export async function secureApiHandler(
   req: NextRequest,
-  handler: (req: NextRequest, user: ReturnType<typeof getCurrentUser>) => Promise<NextResponse>,
-  requiredPermission?: PermissionAction
+  handler: (req: NextRequest, user: User) => Promise<NextResponse>,
+  requiredPermission?: PermissionAction,
+  allowAnonymous: boolean = false
 ): Promise<NextResponse> {
   const startTime = Date.now();
   const ip = getClientIp(req);
   const method = req.method;
   const route = req.nextUrl.pathname;
-  const user = getCurrentUser(req);
 
   // 1. Rate Limit & IP block check
   const rateCheck = checkRequest(ip, method, route);
@@ -61,12 +61,22 @@ export async function secureApiHandler(
     );
   }
 
-  // 2. Permission check
-  if (requiredPermission && !hasPermission(user.role, requiredPermission)) {
+  // 2. Authentication check
+  const user = getCurrentUser(req);
+  if (!user && !allowAnonymous) {
+    const durationMs = Date.now() - startTime;
+    recordRequestLog(ip, method, route, 401, durationMs, false, req.headers.get('user-agent') || undefined);
+    return NextResponse.json(
+      { error: 'Unauthorized: Session missing or expired. Please sign in.' },
+      { status: 401 }
+    );
+  }
+
+  // 3. Permission check
+  if (user && requiredPermission && !hasPermission(user.role, requiredPermission)) {
     const durationMs = Date.now() - startTime;
     recordRequestLog(ip, method, route, 403, durationMs, false, req.headers.get('user-agent') || undefined);
 
-    // Record Security Event
     const db = getDatabase();
     db.securityEvents.unshift({
       id: `evt_${Date.now()}_${Math.random().toString(36).substring(7)}`,
@@ -86,9 +96,9 @@ export async function secureApiHandler(
     );
   }
 
-  // 3. Execute handler
+  // 4. Execute handler
   try {
-    const response = await handler(req, user);
+    const response = await handler(req, user as User);
     const durationMs = Date.now() - startTime;
     recordRequestLog(ip, method, route, response.status, durationMs, false, req.headers.get('user-agent') || undefined);
     return response;
@@ -99,4 +109,3 @@ export async function secureApiHandler(
     return NextResponse.json({ error: err.message || 'Internal Server Error' }, { status: 500 });
   }
 }
-

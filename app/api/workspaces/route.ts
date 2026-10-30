@@ -1,20 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { secureApiHandler, logAudit, getClientIp } from '@/lib/api/handler';
-import { getDatabase, saveDatabase, WorkspaceRecord } from '@/lib/database/db';
-import { ensureWorkspaceSampleFiles, resolveWorkspacePath } from '@/lib/filesystem/workspace';
-import { cloneRepository } from '@/lib/git/gitClient';
+import { getDatabase, saveDatabase } from '@/lib/database/db';
+import { resolveWorkspacePath, ensureWorkspaceSampleFiles } from '@/lib/filesystem/workspace';
 
 export async function GET(req: NextRequest) {
   return secureApiHandler(req, async () => {
     const db = getDatabase();
-    // Ensure all workspaces have local folders initialized
-    for (const ws of db.workspaces) {
-      try {
-        resolveWorkspacePath(ws.id, '');
-        ensureWorkspaceSampleFiles(ws.id);
-      } catch { }
-    }
-    return NextResponse.json({ workspaces: db.workspaces });
+    return NextResponse.json({
+      workspaces: db.projects || [],
+      projects: db.projects || [],
+    });
   });
 }
 
@@ -23,60 +18,29 @@ export async function POST(req: NextRequest) {
     req,
     async (r, user) => {
       const body = await req.json();
+      const db = getDatabase();
       const { name, repoUrl, branch } = body;
 
-      if (!name || typeof name !== 'string') {
-        return NextResponse.json({ error: 'Workspace name is required' }, { status: 400 });
-      }
-
-      const id = name.toLowerCase().replace(/[^a-z0-9_-]/g, '-').slice(0, 32);
-      const db = getDatabase();
-
-      if (db.workspaces.some(w => w.id === id)) {
-        return NextResponse.json({ error: 'Workspace with this name already exists' }, { status: 400 });
-      }
-
-      const newWorkspace: WorkspaceRecord = {
+      const id = (name || 'project').toLowerCase().replace(/[^a-z0-9_-]/g, '-').slice(0, 32);
+      const newWs = {
         id,
-        name,
-        repoUrl: repoUrl || undefined,
+        name: name || id,
+        type: 'sandbox' as const,
+        path: `./workspaces/${id}`,
+        repoUrl,
         branch: branch || 'main',
-        path: id,
         createdAt: new Date().toISOString(),
         lastActive: new Date().toISOString(),
-        status: repoUrl ? 'cloning' : 'ready',
+        status: 'ready' as const,
       };
 
-      db.workspaces.push(newWorkspace);
+      db.projects.push(newWs);
       saveDatabase();
-
-      const ip = getClientIp(req);
-      logAudit(user.email, 'Workspace Created', `Created workspace: ${name} (${id})`, id, ip, 'Success');
-
-      // Initialize directory
       resolveWorkspacePath(id, '');
+      ensureWorkspaceSampleFiles(id);
 
-      if (repoUrl) {
-        try {
-          await cloneRepository(id, repoUrl, branch);
-          newWorkspace.status = 'ready';
-          saveDatabase();
-          logAudit(user.email, 'Git Clone', `Cloned ${repoUrl} into workspace ${id}`, id, ip, 'Success');
-        } catch (err: any) {
-          newWorkspace.status = 'error';
-          saveDatabase();
-          return NextResponse.json({
-            workspace: newWorkspace,
-            warning: `Workspace created, but clone failed: ${err.message}`,
-          });
-        }
-      } else {
-        ensureWorkspaceSampleFiles(id);
-      }
-
-      return NextResponse.json({ workspace: newWorkspace });
+      return NextResponse.json({ workspace: newWs });
     },
     'git_clone'
   );
 }
-

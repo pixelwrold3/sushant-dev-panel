@@ -16,7 +16,7 @@ import {
 
 export default function DeployPage() {
   const [workspaces, setWorkspaces] = useState<any[]>([]);
-  const [selectedWorkspace, setSelectedWorkspace] = useState('main-website');
+  const [selectedWorkspace, setSelectedWorkspace] = useState('diet-ghazipur');
   const [selectedBranch, setSelectedBranch] = useState('main');
   const [deploying, setDeploying] = useState(false);
   const [deployResult, setDeployResult] = useState<any>(null);
@@ -29,10 +29,10 @@ export default function DeployPage() {
   ]);
 
   useEffect(() => {
-    fetch('/api/workspaces')
+    fetch('/api/projects')
       .then((r) => r.json())
       .then((d) => {
-        if (d.workspaces) {
+        if (d.projects) {
           setWorkspaces(d.workspaces);
           if (d.workspaces.length > 0) {
             setSelectedWorkspace(d.workspaces[0].id);
