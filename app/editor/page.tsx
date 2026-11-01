@@ -193,6 +193,29 @@ function EditorContent() {
   const [terminalOpen, setTerminalOpen] = useState(searchParams.get('focus') === 'terminal');
   const isDragging = useRef(false);
 
+  // VS Code Sidebar Resizing state (slide left/right to resize)
+  const [sidebarWidth, setSidebarWidth] = useState(260);
+  const isDraggingSidebar = useRef(false);
+
+  const handleSidebarMouseDown = (e: React.MouseEvent) => {
+    e.preventDefault();
+    isDraggingSidebar.current = true;
+    document.addEventListener('mousemove', handleSidebarMouseMove);
+    document.addEventListener('mouseup', handleSidebarMouseUp);
+  };
+
+  const handleSidebarMouseMove = (e: MouseEvent) => {
+    if (!isDraggingSidebar.current) return;
+    const newWidth = Math.max(160, Math.min(e.clientX, 650));
+    setSidebarWidth(newWidth);
+  };
+
+  const handleSidebarMouseUp = () => {
+    isDraggingSidebar.current = false;
+    document.removeEventListener('mousemove', handleSidebarMouseMove);
+    document.removeEventListener('mouseup', handleSidebarMouseUp);
+  };
+
   const loadFiles = async (pId: string) => {
     try {
       const res = await fetch(`/api/files?projectId=${encodeURIComponent(pId)}`);
@@ -867,8 +890,11 @@ function EditorContent() {
 
       {/* Main Workspace Area */}
       <div className="flex-1 flex overflow-hidden">
-        {/* Left Sidebar: VS Code Explorer */}
-        <div className="w-64 border-r border-[#1e293b] bg-[#0a0e1a] flex flex-col">
+        {/* Left Sidebar: VS Code Explorer with draggable resizer */}
+        <div
+          style={{ width: `${sidebarWidth}px` }}
+          className="border-r border-[#1e293b] bg-[#0a0e1a] flex flex-col relative shrink-0 select-none"
+        >
           <div className="flex items-center justify-between px-3 py-2 border-b border-[#1e293b] text-xs font-semibold text-gray-400 uppercase tracking-wider">
             <span className="truncate">{currentProjectObj?.name || 'Explorer'}</span>
             <div className="flex items-center space-x-1">
@@ -918,6 +944,15 @@ function EditorContent() {
             ) : (
               fileTree.map((node) => renderTreeNode(node))
             )}
+          </div>
+
+          {/* Draggable vertical resize splitter handle (VS Code style slide left/right) */}
+          <div
+            onMouseDown={handleSidebarMouseDown}
+            className="absolute top-0 right-[-3px] w-2 h-full cursor-col-resize hover:bg-blue-500/80 active:bg-blue-600 transition-colors z-20 group flex items-center justify-center"
+            title="Drag to resize file explorer (VS Code style)"
+          >
+            <div className="w-[2px] h-8 bg-gray-600 group-hover:bg-white rounded-full opacity-0 group-hover:opacity-100 transition-opacity" />
           </div>
         </div>
 
