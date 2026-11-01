@@ -2,11 +2,11 @@
 
 import React, { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { ShieldCheck, Lock, Mail, ArrowRight, AlertCircle, CheckCircle2 } from 'lucide-react';
+import { ShieldCheck, Lock, Mail, ArrowRight, AlertCircle } from 'lucide-react';
 
 export default function LoginPage() {
-  const [email, setEmail] = useState('admin@devpanel.local');
-  const [password, setPassword] = useState('adminpassword123');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const router = useRouter();
@@ -20,7 +20,7 @@ export default function LoginPage() {
       const res = await fetch('/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password }),
+        body: JSON.stringify({ email: email.trim(), password }),
       });
 
       const data = await res.json();
@@ -61,7 +61,7 @@ export default function LoginPage() {
           </div>
         )}
 
-        <form onSubmit={handleLogin} className="space-y-4">
+        <form onSubmit={handleLogin} className="space-y-4" autoComplete="off">
           <div>
             <label className="text-xs text-gray-400 block mb-1.5 font-medium">Administrator Email</label>
             <div className="relative">
@@ -69,9 +69,10 @@ export default function LoginPage() {
               <input
                 type="email"
                 required
+                autoComplete="off"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                placeholder="admin@devpanel.local"
+                placeholder="Enter administrator email..."
                 className="w-full bg-[#090d16] border border-[#1e293b] rounded-lg pl-9 pr-3 py-2 text-xs text-gray-200 placeholder-gray-600 focus:outline-none focus:border-blue-500 font-mono transition-colors"
               />
             </div>
@@ -84,9 +85,10 @@ export default function LoginPage() {
               <input
                 type="password"
                 required
+                autoComplete="new-password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                placeholder="••••••••••••"
+                placeholder="Enter master password..."
                 className="w-full bg-[#090d16] border border-[#1e293b] rounded-lg pl-9 pr-3 py-2 text-xs text-gray-200 placeholder-gray-600 focus:outline-none focus:border-blue-500 font-mono transition-colors"
               />
             </div>
@@ -102,12 +104,11 @@ export default function LoginPage() {
           </button>
         </form>
 
-        <div className="mt-6 pt-4 border-t border-[#1e293b] text-center text-[11px] text-gray-500">
-          Default Dev Credentials: <span className="text-blue-400 font-mono">admin@devpanel.local</span> /{' '}
-          <span className="text-emerald-400 font-mono">adminpassword123</span>
+        <div className="mt-6 pt-4 border-t border-[#1e293b] text-center text-[11px] text-gray-500 flex items-center justify-center gap-1.5 font-mono">
+          <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
+          <span>Encrypted Session &bull; RBAC Protected</span>
         </div>
       </div>
     </div>
   );
 }
-
