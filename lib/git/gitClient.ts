@@ -90,6 +90,12 @@ export async function getGitStatus(workspaceId: string): Promise<GitPanelStatus>
     }
   } catch {}
 
+  const db = getDatabase();
+  const proj = db.projects?.find((p) => p.id === workspaceId);
+  if (!remoteUrl && proj?.repoUrl) {
+    remoteUrl = proj.repoUrl;
+  }
+
   let currentCommit = '';
   try {
     currentCommit = await git.revparse(['--short', 'HEAD']);
@@ -120,7 +126,6 @@ export async function getGitStatus(workspaceId: string): Promise<GitPanelStatus>
     }
   }
 
-  const db = getDatabase();
   const history = (db.pullHistory || []).filter(h => h.projectId === workspaceId);
   const lastPull = history.length > 0 ? history[0] : null;
   const canUndoLastPull = lastPull !== null && lastPull.status === 'active';
@@ -332,6 +337,95 @@ export async function gitUndoPull(workspaceId: string, pullId?: string, targetCo
     revertedTo: revertTo.slice(0, 7),
     revertedCommitFull: revertTo,
     message: `Successfully undone pull! Reverted files back to commit ${revertTo.slice(0, 7)}.`,
+  };
+}
+
+/**
+ * Redo / Re-apply an undone pull (Restores code back to the pulled commit)
+ */
+export async function gitRedoPull(workspaceId: string, pullId: string) {
+  const git = getGit(workspaceId);
+  const projectDir = resolveWorkspacePath(workspaceId, '');
+  const db = getDatabase();
+  const history = db.pullHistory || [];
+
+  const record = history.find(h => h.id === pullId);
+  if (!record || !record.toCommit) {
+    throw new Error('Pull record or commit hash not found to re-apply.');
+  }
+
+  // Preserve .env during reset
+  const envBackups = new Map<string, string>();
+  const envFiles = ['.env', '.env.local', '.env.production', '.env.development'];
+  for (const f of envFiles) {
+    const full = path.join(projectDir, f);
+    if (fs.existsSync(full)) {
+      try {
+        envBackups.set(f, fs.readFileSync(full, 'utf8'));
+      } catch {}
+    }
+  }
+
+  // Hard reset to the pulled toCommit
+  await git.reset(['--hard', record.toCommit]);
+
+  // Restore .env files
+  envBackups.forEach((content, f) => {
+    try {
+      fs.writeFileSync(path.join(projectDir, f), content, 'utf8');
+    } catch {}
+  });
+
+  record.status = 'active';
+  delete record.revertedAt;
+  saveDatabase();
+
+  return {
+    success: true,
+    reloadedTo: record.toCommit.slice(0, 7),
+    reloadedCommitFull: record.toCommit,
+    message: `Successfully re-applied pull! Restored files to commit ${record.toCommit.slice(0, 7)}.`,
+  };
+}
+
+/**
+ * Set and permanently save Git Remote URL
+ */
+export async function setRemoteUrl(workspaceId: string, repoUrl: string) {
+  const cleanUrl = repoUrl.trim();
+  if (!cleanUrl) throw new Error('Repository URL cannot be empty');
+
+  const git = getGit(workspaceId);
+  try {
+    const remotes = await git.getRemotes();
+    const hasOrigin = remotes.some(r => r.name === 'origin');
+    if (hasOrigin) {
+      await git.remote(['set-url', 'origin', cleanUrl]);
+    } else {
+      await git.addRemote('origin', cleanUrl);
+    }
+  } catch {
+    try {
+      await initOrCheckGit(workspaceId);
+      await git.addRemote('origin', cleanUrl);
+    } catch {
+      try {
+        await git.remote(['set-url', 'origin', cleanUrl]);
+      } catch {}
+    }
+  }
+
+  // Permanently save in local database
+  const db = getDatabase();
+  const proj = db.projects?.find(p => p.id === workspaceId);
+  if (proj) {
+    proj.repoUrl = cleanUrl;
+  }
+  saveDatabase();
+
+  return {
+    success: true,
+    repoUrl: cleanUrl,
   };
 }
 

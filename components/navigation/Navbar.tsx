@@ -95,8 +95,7 @@ export default function Navbar() {
 
   const navLinks = [
     { name: 'Dashboard', href: '/', icon: Activity },
-    { name: 'Editor', href: '/editor', icon: FileCode },
-    { name: 'Git', href: '/git', icon: GitBranch },
+    { name: 'Workspaces', href: '/workspaces', icon: FolderGit2, extraActive: ['/editor'] },
     { name: 'Security', href: '/security', icon: ShieldAlert },
     { name: 'Monitoring', href: '/monitoring', icon: Server },
     { name: 'Deploy', href: '/deploy', icon: Rocket },
@@ -130,7 +129,10 @@ export default function Navbar() {
           <nav className="hidden md:flex items-center space-x-1">
             {navLinks.map((item) => {
               const Icon = item.icon;
-              const isActive = pathname === item.href || (item.href !== '/' && pathname.startsWith(item.href));
+              const isActive =
+                pathname === item.href ||
+                (item.href !== '/' && pathname.startsWith(item.href)) ||
+                (item.extraActive && item.extraActive.some((ea) => pathname.startsWith(ea)));
               return (
                 <a
                   key={item.name}

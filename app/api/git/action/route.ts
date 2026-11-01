@@ -7,6 +7,8 @@ import {
   commitChanges,
   gitPull,
   gitUndoPull,
+  gitRedoPull,
+  setRemoteUrl,
   getPullHistory,
   gitPush,
   checkoutBranch,
@@ -87,6 +89,32 @@ export async function POST(req: NextRequest) {
               'Warning'
             );
             return NextResponse.json({ success: true, undoResult });
+
+          case 'redo_pull':
+            if (!pullId) throw new Error('pullId is required to re-apply / redo pull');
+            const redoResult = await gitRedoPull(targetId, pullId);
+            logAudit(
+              user.email,
+              'Git Pull Re-applied',
+              `Re-applied pull on ${targetId} back to commit ${redoResult.reloadedTo}`,
+              targetId,
+              ip,
+              'Success'
+            );
+            return NextResponse.json({ success: true, redoResult });
+
+          case 'set_repo_url':
+            if (!repoUrl) throw new Error('repoUrl is required');
+            const repoResult = await setRemoteUrl(targetId, repoUrl);
+            logAudit(
+              user.email,
+              'Git Remote URL Set',
+              `Updated git remote repository URL for ${targetId} to ${repoUrl}`,
+              targetId,
+              ip,
+              'Success'
+            );
+            return NextResponse.json({ success: true, repoResult });
 
           case 'pull_history':
             const history = getPullHistory(targetId);
