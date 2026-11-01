@@ -39,6 +39,25 @@ export interface SecurityEvent {
   result: 'BLOCKED' | 'FLAGGED' | 'ALLOWED' | 'SUCCESS' | 'FAILED';
 }
 
+export interface ChatAttachment {
+  id: string;
+  name: string;
+  type: 'image' | 'file';
+  size: number;
+  url: string; // Base64 or local URL
+}
+
+export interface ChatMessage {
+  id: string;
+  senderEmail: string;
+  senderName: string;
+  senderRole?: string;
+  recipientEmail?: string | null; // null = public channel, email = direct message
+  content: string;
+  attachments?: ChatAttachment[];
+  timestamp: string;
+}
+
 export interface AuditLog {
   id: string;
   timestamp: string;
@@ -130,6 +149,8 @@ export interface DatabaseSchema {
   securityEvents: SecurityEvent[];
   auditLogs: AuditLog[];
   requestLogs: RequestRecord[];
+  chatMessages?: ChatMessage[];
+  onlineUsers?: Record<string, { email: string; name: string; role: string; lastSeen: string }>;
   settings: PanelSettings;
 }
 

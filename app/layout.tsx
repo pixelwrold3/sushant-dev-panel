@@ -1,6 +1,7 @@
 import './globals.css';
 import Navbar from '@/components/navigation/Navbar';
 import CommandPalette from '@/components/palette/CommandPalette';
+import GlobalChatWidget from '@/components/chat/GlobalChatWidget';
 
 export const metadata = {
   title: 'DevPanel - Unified Developer & Server Management Panel',
@@ -18,8 +19,8 @@ export default function RootLayout({
         <Navbar />
         <CommandPalette />
         <main className="flex-1 min-h-[calc(100vh-3.5rem)]">{children}</main>
+        <GlobalChatWidget />
       </body>
     </html>
   );
 }
-
