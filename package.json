@@ -4,9 +4,9 @@
   "private": true,
   "description": "Unified Self-Hosted Developer & Server Management Panel",
   "scripts": {
-    "dev": "node --max-old-space-size=256 server.mjs",
+    "dev": "node --max-old-space-size=256 server.mjs --dev",
     "build": "next build",
-    "start": "NODE_ENV=production node --max-old-space-size=256 server.mjs",
+    "start": "node --max-old-space-size=256 server.mjs",
     "test": "tsx scripts/test-security.ts",
     "lint": "next lint"
   },

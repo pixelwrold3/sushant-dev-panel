@@ -10,7 +10,9 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
-const dev = process.env.NODE_ENV !== 'production';
+const isDev = process.argv.includes('--dev') || process.env.NODE_ENV === 'development';
+process.env.NODE_ENV = isDev ? 'development' : 'production';
+const dev = isDev;
 const hostname = '0.0.0.0';
 const port = parseInt(process.env.PORT || '62244', 10);
 
