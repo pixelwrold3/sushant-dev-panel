@@ -221,8 +221,31 @@ app.prepare()
       ws.send(`\x1b[90mTarget Directory: ${effectivePath}\x1b[0m\r\n\r\n`);
 
       const isWin = process.platform === 'win32';
-      const shell = isWin ? 'powershell.exe' : (fs.existsSync('/bin/bash') ? '/bin/bash' : 'sh');
-      const shellArgs = isWin ? ['-NoLogo'] : [];
+      let shell;
+      let shellArgs;
+      let isPty = false;
+
+      if (isWin) {
+        shell = 'powershell.exe';
+        shellArgs = ['-NoLogo'];
+        isPty = false;
+      } else {
+        // Priority 1: Use Python3 unbuffered PTY (Standard on Ubuntu VPS - provides real TTY with echo & PS1)
+        const pyPath = fs.existsSync('/usr/bin/python3') ? '/usr/bin/python3' : (fs.existsSync('/bin/python3') ? '/bin/python3' : null);
+        if (pyPath) {
+          shell = pyPath;
+          shellArgs = ['-u', '-c', "import pty, os; os.environ['TERM']='xterm-256color'; pty.spawn(['/bin/bash'])"];
+          isPty = true;
+        } else if (fs.existsSync('/usr/bin/script') || fs.existsSync('/bin/script')) {
+          shell = fs.existsSync('/usr/bin/script') ? '/usr/bin/script' : '/bin/script';
+          shellArgs = ['-qfc', '/bin/bash', '/dev/null'];
+          isPty = true;
+        } else {
+          shell = fs.existsSync('/bin/bash') ? '/bin/bash' : 'sh';
+          shellArgs = ['-i'];
+          isPty = false;
+        }
+      }
 
       let proc;
       try {
@@ -240,7 +263,7 @@ app.prepare()
         });
 
         if (proc.stdin && proc.stdin.writable) {
-          if (!isWin) {
+          if (!isWin && !isPty) {
             proc.stdin.write('export PS1="\\u@devpanel:\\w\\$ "\n');
           }
         }
@@ -270,13 +293,23 @@ app.prepare()
         });
 
         ws.on('message', (msg) => {
-          let str = msg.toString();
-          // Convert carriage return (\r) from xterm into newline (\n) for linux shells
-          if (str === '\r') {
-            str = '\n';
+          const str = msg.toString();
+
+          // In non-PTY mode, echo keystrokes locally so user can see typed input
+          if (!isPty) {
+            if (str === '\r') {
+              ws.send('\r\n');
+            } else if (str === '\x7f' || str === '\b') {
+              ws.send('\b \b');
+            } else if (str.length === 1 && str.charCodeAt(0) >= 32) {
+              ws.send(str);
+            }
           }
+
           if (proc && proc.stdin && proc.stdin.writable) {
-            proc.stdin.write(str);
+            // Translate carriage return \r to newline \n for pipe-based shells
+            const toWrite = (!isPty && str === '\r') ? '\n' : str;
+            proc.stdin.write(toWrite);
           }
         });
 

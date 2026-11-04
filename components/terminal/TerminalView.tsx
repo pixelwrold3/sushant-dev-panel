@@ -35,6 +35,7 @@ export default function TerminalView({ projectId }: TerminalViewProps) {
           background: '#090d16',
           foreground: '#f1f5f9',
           cursor: '#38bdf8',
+          cursorAccent: '#090d16',
           selectionBackground: '#1e293b',
           black: '#090d16',
           red: '#f87171',
@@ -49,6 +50,9 @@ export default function TerminalView({ projectId }: TerminalViewProps) {
         fontSize: 13,
         lineHeight: 1.2,
         cursorBlink: true,
+        cursorStyle: 'block',
+        convertEol: true,
+        scrollback: 5000,
       });
 
       const fitAddon = new FitAddon();
@@ -56,7 +60,19 @@ export default function TerminalView({ projectId }: TerminalViewProps) {
 
       terminalRef.current.innerHTML = '';
       term.open(terminalRef.current);
-      fitAddon.fit();
+      
+      setTimeout(() => {
+        try {
+          fitAddon.fit();
+          term.focus();
+        } catch {}
+      }, 50);
+
+      terminalRef.current.onclick = () => {
+        try {
+          term.focus();
+        } catch {}
+      };
 
       termInstance.current = term;
 
@@ -67,6 +83,9 @@ export default function TerminalView({ projectId }: TerminalViewProps) {
 
       ws.onopen = () => {
         if (mounted) setConnectionStatus('connected');
+        try {
+          term.focus();
+        } catch {}
       };
 
       ws.onmessage = (event) => {
