@@ -1,5 +1,5 @@
 import { createServer } from 'http';
-import { parse } from 'url';
+import { parse, fileURLToPath } from 'url';
 import next from 'next';
 import { WebSocketServer, WebSocket } from 'ws';
 import { spawn } from 'child_process';
@@ -7,6 +7,14 @@ import path from 'path';
 import fs from 'fs';
 import os from 'os';
 import dotenv from 'dotenv';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+// Always ensure the process runs from its own project root directory
+try {
+  process.chdir(__dirname);
+} catch {}
 
 dotenv.config();
 
@@ -18,17 +26,18 @@ if (process.stderr._handle && typeof process.stderr._handle.setBlocking === 'fun
   try { process.stderr._handle.setBlocking(true); } catch {}
 }
 
-const isDev = process.argv.includes('--dev') || process.env.NODE_ENV === 'development';
+// Only enable dev mode if explicitly requested with --dev flag (prevents slow on-demand compilation in production)
+const isDev = process.argv.includes('--dev');
 process.env.NODE_ENV = isDev ? 'development' : 'production';
 const dev = isDev;
 const hostname = '0.0.0.0';
 const port = parseInt(process.env.PORT || '62244', 10);
 
-const app = next({ dev, hostname, port });
+const app = next({ dev, hostname, port, dir: __dirname });
 const handle = app.getRequestHandler();
 
 function getProjectDir(projectId) {
-  const dbFile = path.resolve(process.cwd(), 'data', 'local-db.json');
+  const dbFile = path.resolve(__dirname, 'data', 'local-db.json');
   if (fs.existsSync(dbFile)) {
     try {
       const db = JSON.parse(fs.readFileSync(dbFile, 'utf8'));
@@ -39,7 +48,7 @@ function getProjectDir(projectId) {
           if (fs.existsSync(resolved)) return resolved;
         } else {
           const root = process.env.WORKSPACE_ROOT || './workspaces';
-          const wsPath = path.resolve(process.cwd(), root, projectId);
+          const wsPath = path.resolve(__dirname, root, projectId);
           if (fs.existsSync(wsPath)) return wsPath;
         }
       }
@@ -58,7 +67,7 @@ function getProjectDir(projectId) {
 
   const root = process.env.WORKSPACE_ROOT || './workspaces';
   const cleanId = (projectId || 'main-website').replace(/[^a-zA-Z0-9_\-\.]/g, '');
-  const dir = path.resolve(process.cwd(), root, cleanId);
+  const dir = path.resolve(__dirname, root, cleanId);
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
   }
