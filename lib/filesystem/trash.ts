@@ -196,3 +196,4 @@ export function emptyTrash(projectId: string): void {
   }
   saveTrashIndex(projectId, { items: [] });
 }
+
