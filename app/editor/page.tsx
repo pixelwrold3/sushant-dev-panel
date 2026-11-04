@@ -296,8 +296,14 @@ function EditorContent() {
     }
   }, [serviceLogs]);
 
+  const handleOpenProductionModal = () => {
+    setProductionModalOpen(true);
+    if (serviceLogs.length === 0) {
+      handleExecuteServiceAction('status');
+    }
+  };
+
   const handleExecuteServiceAction = async (action: 'start' | 'stop' | 'restart' | 'status') => {
-    setProductionDropdownOpen(false);
     setProductionModalOpen(true);
     setServiceActionLoading(true);
 
@@ -1260,61 +1266,20 @@ function EditorContent() {
             )}
           </button>
 
-          {/* Production Service Control Button (systemctl restart, start, stop, status) */}
-          <div className="relative">
-            <button
-              onClick={() => setProductionDropdownOpen(!productionDropdownOpen)}
-              className="flex items-center gap-1.5 px-2.5 py-1 rounded bg-emerald-950/40 hover:bg-emerald-900/50 border border-emerald-500/40 text-xs text-emerald-300 font-medium transition-colors shrink-0 shadow-sm"
-              title="Production Service Management (systemctl)"
-            >
-              <PlayCircle className="w-3.5 h-3.5 text-emerald-400" />
-              <span>Production</span>
-              <ChevronDown className="w-3 h-3 text-emerald-400/80" />
-            </button>
-
-            {productionDropdownOpen && (
-              <div className="absolute left-0 mt-1.5 w-56 bg-[#0d1322] border border-[#1e293b] rounded-lg shadow-2xl py-1.5 z-50 text-xs animate-in fade-in duration-100">
-                <div className="px-3 py-1.5 border-b border-[#1e293b] flex items-center justify-between text-[11px] text-gray-400 font-mono">
-                  <span>Service:</span>
-                  <span className="text-emerald-400 font-semibold">{currentServiceName}</span>
-                </div>
-
-                <button
-                  onClick={() => handleExecuteServiceAction('start')}
-                  className="w-full flex items-center gap-2 px-3 py-2 text-emerald-400 hover:bg-[#131e36] text-left transition-colors"
-                >
-                  <Play className="w-3.5 h-3.5 text-emerald-400" />
-                  <span>Start Website</span>
-                </button>
-
-                <button
-                  onClick={() => handleExecuteServiceAction('restart')}
-                  className="w-full flex items-center gap-2 px-3 py-2 text-cyan-400 hover:bg-[#131e36] text-left transition-colors"
-                >
-                  <RefreshCw className="w-3.5 h-3.5 text-cyan-400" />
-                  <span>Restart Website</span>
-                </button>
-
-                <button
-                  onClick={() => handleExecuteServiceAction('stop')}
-                  className="w-full flex items-center gap-2 px-3 py-2 text-rose-400 hover:bg-[#131e36] text-left transition-colors"
-                >
-                  <Square className="w-3.5 h-3.5 text-rose-400" />
-                  <span>Stop Website</span>
-                </button>
-
-                <div className="border-t border-[#1e293b] my-1" />
-
-                <button
-                  onClick={() => handleExecuteServiceAction('status')}
-                  className="w-full flex items-center gap-2 px-3 py-2 text-blue-400 hover:bg-[#131e36] text-left transition-colors"
-                >
-                  <Activity className="w-3.5 h-3.5 text-blue-400" />
-                  <span>Check Status &amp; Logs</span>
-                </button>
-              </div>
-            )}
-          </div>
+          {/* Production Service Control Button (Clicking directly opens popup modal) */}
+          <button
+            onClick={handleOpenProductionModal}
+            className="flex items-center gap-1.5 px-2.5 py-1 rounded bg-emerald-950/50 hover:bg-emerald-900/60 border border-emerald-500/50 text-xs text-emerald-300 font-medium transition-colors shrink-0 shadow-sm"
+            title="Open Production Service Manager (diet-website)"
+          >
+            <PlayCircle className="w-3.5 h-3.5 text-emerald-400" />
+            <span>Production</span>
+            <span
+              className={`w-1.5 h-1.5 rounded-full ${
+                serviceStatusBadge === 'Running' ? 'bg-emerald-400 animate-pulse' : 'bg-rose-400'
+              }`}
+            />
+          </button>
         </div>
 
         {/* Right Action Controls: Save & Terminal */}
@@ -2443,46 +2408,73 @@ function EditorContent() {
 
             {/* Quick Action Toolbar */}
             <div className="px-4 py-2 bg-[#090d16]/90 border-b border-[#1e293b] flex items-center justify-between gap-2 overflow-x-auto text-xs">
+              {/* Dynamic Buttons based on Running vs Stopped status */}
               <div className="flex items-center gap-2 shrink-0">
-                <button
-                  onClick={() => handleExecuteServiceAction('start')}
-                  disabled={serviceActionLoading}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-300 border border-emerald-500/40 font-medium transition-colors disabled:opacity-50"
-                  title="systemctl start"
-                >
-                  <Play className="w-3.5 h-3.5 text-emerald-400" />
-                  <span>Start</span>
-                </button>
+                {serviceStatusBadge === 'Stopped' ? (
+                  <>
+                    <button
+                      onClick={() => handleExecuteServiceAction('start')}
+                      disabled={serviceActionLoading}
+                      className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-medium transition-colors shadow-sm disabled:opacity-50"
+                      title="systemctl start diet-website"
+                    >
+                      <Play className="w-3.5 h-3.5 fill-current" />
+                      <span>Start Website</span>
+                    </button>
 
-                <button
-                  onClick={() => handleExecuteServiceAction('restart')}
-                  disabled={serviceActionLoading}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded bg-cyan-600/20 hover:bg-cyan-600/30 text-cyan-300 border border-cyan-500/40 font-medium transition-colors disabled:opacity-50"
-                  title="systemctl restart"
-                >
-                  <RefreshCw className={`w-3.5 h-3.5 text-cyan-400 ${serviceActionLoading ? 'animate-spin' : ''}`} />
-                  <span>Restart</span>
-                </button>
+                    <button
+                      onClick={() => handleExecuteServiceAction('restart')}
+                      disabled={serviceActionLoading}
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-cyan-600/20 hover:bg-cyan-600/30 text-cyan-300 border border-cyan-500/40 font-medium transition-colors disabled:opacity-50"
+                      title="systemctl restart diet-website"
+                    >
+                      <RefreshCw className={`w-3.5 h-3.5 text-cyan-400 ${serviceActionLoading ? 'animate-spin' : ''}`} />
+                      <span>Restart</span>
+                    </button>
 
-                <button
-                  onClick={() => handleExecuteServiceAction('stop')}
-                  disabled={serviceActionLoading}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded bg-rose-600/20 hover:bg-rose-600/30 text-rose-300 border border-rose-500/40 font-medium transition-colors disabled:opacity-50"
-                  title="systemctl stop"
-                >
-                  <Square className="w-3.5 h-3.5 text-rose-400" />
-                  <span>Stop</span>
-                </button>
+                    <button
+                      onClick={() => handleExecuteServiceAction('status')}
+                      disabled={serviceActionLoading}
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#131e36] hover:bg-[#1e293b] text-gray-300 hover:text-white border border-[#1e293b] font-medium transition-colors disabled:opacity-50"
+                      title="systemctl status diet-website"
+                    >
+                      <Activity className="w-3.5 h-3.5 text-blue-400" />
+                      <span>Status</span>
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <button
+                      onClick={() => handleExecuteServiceAction('stop')}
+                      disabled={serviceActionLoading}
+                      className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 text-white font-medium transition-colors shadow-sm disabled:opacity-50"
+                      title="systemctl stop diet-website"
+                    >
+                      <Square className="w-3.5 h-3.5 fill-current" />
+                      <span>Stop Website</span>
+                    </button>
 
-                <button
-                  onClick={() => handleExecuteServiceAction('status')}
-                  disabled={serviceActionLoading}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded bg-[#131e36] hover:bg-[#1e293b] text-gray-300 hover:text-white border border-[#1e293b] font-medium transition-colors disabled:opacity-50"
-                  title="systemctl status"
-                >
-                  <Activity className="w-3.5 h-3.5 text-blue-400" />
-                  <span>Status</span>
-                </button>
+                    <button
+                      onClick={() => handleExecuteServiceAction('restart')}
+                      disabled={serviceActionLoading}
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-cyan-600/20 hover:bg-cyan-600/30 text-cyan-300 border border-cyan-500/40 font-medium transition-colors disabled:opacity-50"
+                      title="systemctl restart diet-website"
+                    >
+                      <RefreshCw className={`w-3.5 h-3.5 text-cyan-400 ${serviceActionLoading ? 'animate-spin' : ''}`} />
+                      <span>Restart</span>
+                    </button>
+
+                    <button
+                      onClick={() => handleExecuteServiceAction('status')}
+                      disabled={serviceActionLoading}
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#131e36] hover:bg-[#1e293b] text-gray-300 hover:text-white border border-[#1e293b] font-medium transition-colors disabled:opacity-50"
+                      title="systemctl status diet-website"
+                    >
+                      <Activity className="w-3.5 h-3.5 text-blue-400" />
+                      <span>Status</span>
+                    </button>
+                  </>
+                )}
               </div>
 
               <div className="flex items-center gap-2 shrink-0 text-[11px] text-gray-400">
