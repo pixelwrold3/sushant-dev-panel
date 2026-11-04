@@ -43,6 +43,11 @@ function getProjectDir(projectId) {
     return '/var/www/diet-website';
   }
 
+  // Fallback to dev if it exists
+  if (projectId === 'dev' && fs.existsSync('/var/www/dev')) {
+    return '/var/www/dev';
+  }
+
   const root = process.env.WORKSPACE_ROOT || './workspaces';
   const cleanId = (projectId || 'main-website').replace(/[^a-zA-Z0-9_\-\.]/g, '');
   const dir = path.resolve(process.cwd(), root, cleanId);
@@ -251,7 +256,7 @@ app.prepare()
   server.listen(port, hostname, (err) => {
     if (err) throw err;
     console.log(`> DevPanel ready on http://${hostname}:${port}`);
-    console.log(`> Connected Project Targeting Enabled (/var/www/diet-website supported)`);
+    console.log(`> Connected Project Targeting Enabled (/var/www/diet-website & /var/www/dev supported)`);
   });
 }).catch((err) => {
   console.error('\x1b[31m[DevPanel Init Error]:\x1b[0m Failed to initialize Next.js app:');

@@ -209,6 +209,22 @@ const DEFAULT_DB: DatabaseSchema = {
       status: 'ready',
     },
     {
+      id: 'dev',
+      name: 'Dev (Temp Testing)',
+      type: 'connected',
+      path: '/var/www/dev',
+      repoUrl: '',
+      branch: 'main',
+      runtime: 'Node.js',
+      buildCommand: 'npm run build',
+      restartCommand: '',
+      systemdService: '',
+      autoStart: false,
+      createdAt: new Date().toISOString(),
+      lastActive: new Date().toISOString(),
+      status: 'ready',
+    },
+    {
       id: 'main-website',
       name: 'Sandbox Project',
       type: 'sandbox',
@@ -303,6 +319,13 @@ export function getDatabase(): DatabaseSchema {
 
       if (!dbCache?.projects.some(p => p.id === 'diet-ghazipur' || p.path === '/var/www/diet-website')) {
         dbCache!.projects.unshift(DEFAULT_DB.projects[0]);
+      }
+
+      if (!dbCache?.projects.some(p => p.id === 'dev' || p.path === '/var/www/dev')) {
+        const devProj = DEFAULT_DB.projects.find(p => p.id === 'dev');
+        if (devProj) {
+          dbCache!.projects.push(devProj);
+        }
       }
 
       if (!dbCache?.pullHistory) dbCache!.pullHistory = [];
