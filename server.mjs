@@ -94,6 +94,201 @@ process.on('unhandledRejection', (reason) => {
   console.error('\x1b[31m[DevPanel Unhandled Rejection]:\x1b[0m', reason);
 });
 
+// ============================================================================
+// Global Persistent Terminal Sessions Manager
+// Keeps background shell processes alive across web page reloads, tab switches,
+// and reconnects. Caches output buffer so users never lose history or work.
+// ============================================================================
+const persistentTerminalSessions = new Map();
+const MAX_BUFFER_CHARS = 1000000; // ~1MB text buffer per tab (~50,000 lines of history)
+
+function getOrCreateTerminalSession(targetProject, tabId, effectivePath, isWin) {
+  const sessionKey = `${targetProject}:::${tabId}`;
+  let session = persistentTerminalSessions.get(sessionKey);
+
+  // If session exists and process is still actively running, reuse it
+  if (session && session.proc && session.proc.exitCode === null && !session.proc.killed) {
+    return session;
+  }
+
+  const hasBwrap = !isWin && (fs.existsSync('/usr/bin/bwrap') || fs.existsSync('/bin/bwrap'));
+  const bwrapBin = fs.existsSync('/usr/bin/bwrap') ? '/usr/bin/bwrap' : '/bin/bwrap';
+  const pyPath = !isWin && (fs.existsSync('/usr/bin/python3') ? '/usr/bin/python3' : (fs.existsSync('/bin/python3') ? '/bin/python3' : null));
+
+  let shell;
+  let shellArgs;
+  let isPty = false;
+
+  if (isWin) {
+    shell = 'powershell.exe';
+    shellArgs = ['-NoLogo'];
+    isPty = false;
+  } else if (hasBwrap && pyPath) {
+    // Priority 1: Real PTY inside Bubblewrap Virtual Sandbox Jail (CodeSandbox-style zero-RAM jail)
+    const bwrapCmdList = [
+      bwrapBin,
+      '--ro-bind', '/usr', '/usr',
+      '--ro-bind', '/lib', '/lib',
+      '--ro-bind-try', '/lib64', '/lib64',
+      '--ro-bind', '/bin', '/bin',
+      '--ro-bind-try', '/sbin', '/sbin',
+      '--ro-bind-try', '/etc/resolv.conf', '/etc/resolv.conf',
+      '--ro-bind-try', '/etc/hosts', '/etc/hosts',
+      '--ro-bind-try', '/etc/ssl', '/etc/ssl',
+      '--ro-bind-try', '/etc/ca-certificates', '/etc/ca-certificates',
+      '--proc', '/proc',
+      '--dev', '/dev',
+      '--tmpfs', '/tmp',
+      '--bind', effectivePath, effectivePath,
+      '--chdir', effectivePath,
+      '--setenv', 'PATH', process.env.PATH || '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
+      '--setenv', 'HOME', effectivePath,
+      '--setenv', 'USER', 'developer',
+      '--setenv', 'TERM', 'xterm-256color',
+      '--setenv', 'PS1', '\\[\\033[01;32m\\]developer@' + targetProject + '\\[\\033[00m\\]:\\[\\033[01;34m\\]\\w\\[\\033[00m\\]\\$ ',
+      '--die-with-parent',
+      '--unshare-all',
+      '--share-net',
+      '/bin/bash',
+    ];
+
+    shell = pyPath;
+    shellArgs = [
+      '-u',
+      '-c',
+      `import pty, os; os.environ['TERM']='xterm-256color'; pty.spawn(${JSON.stringify(bwrapCmdList)})`
+    ];
+    isPty = true;
+  } else if (hasBwrap) {
+    // Priority 2: Bubblewrap without Python PTY
+    shell = bwrapBin;
+    shellArgs = [
+      '--ro-bind', '/usr', '/usr',
+      '--ro-bind', '/lib', '/lib',
+      '--ro-bind-try', '/lib64', '/lib64',
+      '--ro-bind', '/bin', '/bin',
+      '--ro-bind-try', '/sbin', '/sbin',
+      '--ro-bind-try', '/etc/resolv.conf', '/etc/resolv.conf',
+      '--ro-bind-try', '/etc/hosts', '/etc/hosts',
+      '--ro-bind-try', '/etc/ssl', '/etc/ssl',
+      '--ro-bind-try', '/etc/ca-certificates', '/etc/ca-certificates',
+      '--proc', '/proc',
+      '--dev', '/dev',
+      '--tmpfs', '/tmp',
+      '--bind', effectivePath, effectivePath,
+      '--chdir', effectivePath,
+      '--setenv', 'PATH', process.env.PATH || '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
+      '--setenv', 'HOME', effectivePath,
+      '--setenv', 'USER', 'developer',
+      '--setenv', 'TERM', 'xterm-256color',
+      '--setenv', 'PS1', '\\[\\033[01;32m\\]developer@' + targetProject + '\\[\\033[00m\\]:\\[\\033[01;34m\\]\\w\\[\\033[00m\\]\\$ ',
+      '--die-with-parent',
+      '--unshare-all',
+      '--share-net',
+      '/bin/bash',
+    ];
+    isPty = false;
+  } else if (pyPath) {
+    // Priority 3: Python PTY without bwrap
+    shell = pyPath;
+    shellArgs = ['-u', '-c', "import pty, os; os.environ['TERM']='xterm-256color'; pty.spawn(['/bin/bash'])"];
+    isPty = true;
+  } else {
+    // Priority 4: Direct shell
+    shell = fs.existsSync('/bin/bash') ? '/bin/bash' : 'sh';
+    shellArgs = ['-i'];
+    isPty = false;
+  }
+
+  const banner = [
+    `\r\n\x1b[1;36m DevPanel Project Terminal\x1b[0m\r\n`,
+    `\x1b[90mConnected Project: ${targetProject}\x1b[0m\r\n`,
+    `\x1b[90mTarget Directory: ${effectivePath}\x1b[0m\r\n`,
+    hasBwrap
+      ? `\x1b[1;32mSecurity: Virtual Container Jail Active (Filesystem & Root Isolated)\x1b[0m\r\n\r\n`
+      : (!isWin ? `\x1b[33mSecurity Note: Run 'apt install -y bubblewrap' on VPS for virtual jail isolation\x1b[0m\r\n\r\n` : `\r\n`)
+  ].join('');
+
+  const proc = spawn(shell, shellArgs, {
+    cwd: effectivePath,
+    env: {
+      ...process.env,
+      WORKSPACE_ISOLATED: 'true',
+      PATH: process.env.PATH,
+      TERM: 'xterm-256color',
+      COLORTERM: 'truecolor',
+      PWD: effectivePath,
+    },
+    shell: false,
+  });
+
+  if (proc.stdin && proc.stdin.writable && !isWin && !isPty) {
+    try { proc.stdin.write('export PS1="\\u@devpanel:\\w\\$ "\n'); } catch {}
+  }
+
+  session = {
+    targetProject,
+    tabId,
+    effectivePath,
+    proc,
+    isPty,
+    buffer: [banner],
+    totalBufferLength: banner.length,
+    clients: new Set(),
+    lastActive: Date.now(),
+  };
+
+  const handleData = (data) => {
+    const str = data.toString();
+    session.lastActive = Date.now();
+    session.buffer.push(str);
+    session.totalBufferLength += str.length;
+
+    // Prune oldest buffer chunks if exceeding MAX_BUFFER_CHARS
+    if (session.totalBufferLength > MAX_BUFFER_CHARS) {
+      while (session.totalBufferLength > MAX_BUFFER_CHARS * 0.8 && session.buffer.length > 1) {
+        const removed = session.buffer.shift();
+        session.totalBufferLength -= (removed ? removed.length : 0);
+      }
+    }
+
+    // Broadcast output chunk to all active connected clients for this session
+    for (const client of session.clients) {
+      if (client.readyState === WebSocket.OPEN) {
+        try { client.send(str); } catch {}
+      }
+    }
+  };
+
+  proc.stdout.on('data', handleData);
+  proc.stderr.on('data', handleData);
+
+  proc.on('close', (code) => {
+    const exitMsg = `\r\n\x1b[90m[Process exited with code ${code}]\x1b[0m\r\n`;
+    session.buffer.push(exitMsg);
+    for (const client of session.clients) {
+      if (client.readyState === WebSocket.OPEN) {
+        try { client.send(exitMsg); } catch {}
+      }
+    }
+    persistentTerminalSessions.delete(sessionKey);
+  });
+
+  proc.on('error', (err) => {
+    const errMsg = `\r\n\x1b[31m[Process error: ${err.message}]\x1b[0m\r\n`;
+    session.buffer.push(errMsg);
+    for (const client of session.clients) {
+      if (client.readyState === WebSocket.OPEN) {
+        try { client.send(errMsg); } catch {}
+      }
+    }
+    persistentTerminalSessions.delete(sessionKey);
+  });
+
+  persistentTerminalSessions.set(sessionKey, session);
+  return session;
+}
+
 console.log(`> Initializing DevPanel production engine on ${hostname}:${port}...`);
 
 app.prepare()
@@ -213,181 +408,71 @@ app.prepare()
 
     if (pathname === '/api/ws/terminal') {
       const targetProject = query.projectId || query.workspaceId || 'diet-ghazipur';
+      const tabId = String(query.tabId || '1');
+      const sessionKey = `${targetProject}:::${tabId}`;
       const projectPath = getProjectDir(targetProject);
       const effectivePath = fs.existsSync(projectPath) ? projectPath : __dirname;
-
       const isWin = process.platform === 'win32';
-      const hasBwrap = !isWin && (fs.existsSync('/usr/bin/bwrap') || fs.existsSync('/bin/bwrap'));
-      const bwrapBin = fs.existsSync('/usr/bin/bwrap') ? '/usr/bin/bwrap' : '/bin/bwrap';
-      const pyPath = !isWin && (fs.existsSync('/usr/bin/python3') ? '/usr/bin/python3' : (fs.existsSync('/bin/python3') ? '/bin/python3' : null));
 
-      ws.send(`\r\n\x1b[1;36m DevPanel Project Terminal\x1b[0m\r\n`);
-      ws.send(`\x1b[90mConnected Project: ${targetProject}\x1b[0m\r\n`);
-      ws.send(`\x1b[90mTarget Directory: ${effectivePath}\x1b[0m\r\n`);
-      if (hasBwrap) {
-        ws.send(`\x1b[1;32mSecurity: Virtual Container Jail Active (Filesystem & Root Isolated)\x1b[0m\r\n\r\n`);
-      } else if (!isWin) {
-        ws.send(`\x1b[33mSecurity Note: Run 'apt install -y bubblewrap' on VPS for virtual jail isolation\x1b[0m\r\n\r\n`);
-      } else {
-        ws.send(`\r\n`);
-      }
-
-      let shell;
-      let shellArgs;
-      let isPty = false;
-
-      if (isWin) {
-        shell = 'powershell.exe';
-        shellArgs = ['-NoLogo'];
-        isPty = false;
-      } else if (hasBwrap && pyPath) {
-        // Priority 1: Real PTY inside Bubblewrap Virtual Sandbox Jail (CodeSandbox-style zero-RAM jail)
-        const bwrapCmdList = [
-          bwrapBin,
-          '--ro-bind', '/usr', '/usr',
-          '--ro-bind', '/lib', '/lib',
-          '--ro-bind-try', '/lib64', '/lib64',
-          '--ro-bind', '/bin', '/bin',
-          '--ro-bind-try', '/sbin', '/sbin',
-          '--ro-bind-try', '/etc/resolv.conf', '/etc/resolv.conf',
-          '--ro-bind-try', '/etc/hosts', '/etc/hosts',
-          '--ro-bind-try', '/etc/ssl', '/etc/ssl',
-          '--ro-bind-try', '/etc/ca-certificates', '/etc/ca-certificates',
-          '--proc', '/proc',
-          '--dev', '/dev',
-          '--tmpfs', '/tmp',
-          '--bind', effectivePath, effectivePath,
-          '--chdir', effectivePath,
-          '--setenv', 'PATH', process.env.PATH || '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
-          '--setenv', 'HOME', effectivePath,
-          '--setenv', 'USER', 'developer',
-          '--setenv', 'TERM', 'xterm-256color',
-          '--setenv', 'PS1', '\\[\\033[01;32m\\]developer@' + targetProject + '\\[\\033[00m\\]:\\[\\033[01;34m\\]\\w\\[\\033[00m\\]\\$ ',
-          '--die-with-parent',
-          '--unshare-all',
-          '--share-net',
-          '/bin/bash',
-        ];
-
-        shell = pyPath;
-        shellArgs = [
-          '-u',
-          '-c',
-          `import pty, os; os.environ['TERM']='xterm-256color'; pty.spawn(${JSON.stringify(bwrapCmdList)})`
-        ];
-        isPty = true;
-      } else if (hasBwrap) {
-        // Priority 2: Bubblewrap without Python PTY
-        shell = bwrapBin;
-        shellArgs = [
-          '--ro-bind', '/usr', '/usr',
-          '--ro-bind', '/lib', '/lib',
-          '--ro-bind-try', '/lib64', '/lib64',
-          '--ro-bind', '/bin', '/bin',
-          '--ro-bind-try', '/sbin', '/sbin',
-          '--ro-bind-try', '/etc/resolv.conf', '/etc/resolv.conf',
-          '--ro-bind-try', '/etc/hosts', '/etc/hosts',
-          '--ro-bind-try', '/etc/ssl', '/etc/ssl',
-          '--ro-bind-try', '/etc/ca-certificates', '/etc/ca-certificates',
-          '--proc', '/proc',
-          '--dev', '/dev',
-          '--tmpfs', '/tmp',
-          '--bind', effectivePath, effectivePath,
-          '--chdir', effectivePath,
-          '--setenv', 'PATH', process.env.PATH || '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
-          '--setenv', 'HOME', effectivePath,
-          '--setenv', 'USER', 'developer',
-          '--setenv', 'TERM', 'xterm-256color',
-          '--setenv', 'PS1', '\\[\\033[01;32m\\]developer@' + targetProject + '\\[\\033[00m\\]:\\[\\033[01;34m\\]\\w\\[\\033[00m\\]\\$ ',
-          '--die-with-parent',
-          '--unshare-all',
-          '--share-net',
-          '/bin/bash',
-        ];
-        isPty = false;
-      } else if (pyPath) {
-        // Priority 3: Python PTY without bwrap
-        shell = pyPath;
-        shellArgs = ['-u', '-c', "import pty, os; os.environ['TERM']='xterm-256color'; pty.spawn(['/bin/bash'])"];
-        isPty = true;
-      } else {
-        // Priority 4: Direct shell
-        shell = fs.existsSync('/bin/bash') ? '/bin/bash' : 'sh';
-        shellArgs = ['-i'];
-        isPty = false;
-      }
-
-      let proc;
       try {
-        proc = spawn(shell, shellArgs, {
-          cwd: effectivePath,
-          env: {
-            ...process.env,
-            WORKSPACE_ISOLATED: 'true',
-            PATH: process.env.PATH,
-            TERM: 'xterm-256color',
-            COLORTERM: 'truecolor',
-            PWD: effectivePath,
-          },
-          shell: false,
-        });
+        const session = getOrCreateTerminalSession(targetProject, tabId, effectivePath, isWin);
+        session.clients.add(ws);
 
-        if (proc.stdin && proc.stdin.writable) {
-          if (!isWin && !isPty) {
-            proc.stdin.write('export PS1="\\u@devpanel:\\w\\$ "\n');
+        // Instantly replay all accumulated terminal output and history to the client!
+        if (session.buffer.length > 0) {
+          const replay = session.buffer.join('');
+          if (replay) {
+            ws.send(replay);
           }
         }
 
-        proc.stdout.on('data', (data) => {
-          if (ws.readyState === WebSocket.OPEN) {
-            ws.send(data.toString());
-          }
-        });
-
-        proc.stderr.on('data', (data) => {
-          if (ws.readyState === WebSocket.OPEN) {
-            ws.send(data.toString());
-          }
-        });
-
-        proc.on('close', (code) => {
-          if (ws.readyState === WebSocket.OPEN) {
-            ws.send(`\r\n\x1b[90m[Process exited with code ${code}]\x1b[0m\r\n`);
-          }
-        });
-
-        proc.on('error', (err) => {
-          if (ws.readyState === WebSocket.OPEN) {
-            ws.send(`\r\n\x1b[31m[Process error: ${err.message}]\x1b[0m\r\n`);
-          }
-        });
-
         ws.on('message', (msg) => {
           const str = msg.toString();
+          const curSession = persistentTerminalSessions.get(sessionKey);
+          if (!curSession || !curSession.proc) return;
 
-          // Check for JSON control messages (e.g. resize, kill)
+          // Check for JSON control messages (e.g. resize, kill, clear, restart)
           if (str.startsWith('{') && str.endsWith('}')) {
             try {
               const parsed = JSON.parse(str);
               if (parsed.type === 'resize' && parsed.cols && parsed.rows) {
                 const cols = parseInt(parsed.cols, 10);
                 const rows = parseInt(parsed.rows, 10);
-                if (proc && proc.stdout && typeof proc.stdout.setWindowSize === 'function') {
-                  try { proc.stdout.setWindowSize(rows, cols); } catch {}
+                if (curSession.proc.stdout && typeof curSession.proc.stdout.setWindowSize === 'function') {
+                  try { curSession.proc.stdout.setWindowSize(rows, cols); } catch {}
                 }
                 return;
               }
               if (parsed.type === 'kill') {
-                if (proc) {
-                  try { proc.kill('SIGKILL'); } catch {}
+                try { curSession.proc.kill('SIGKILL'); } catch {}
+                persistentTerminalSessions.delete(sessionKey);
+                for (const client of curSession.clients) {
+                  if (client.readyState === WebSocket.OPEN) {
+                    try { client.send('\r\n\x1b[31m[Terminal session killed by user]\x1b[0m\r\n'); } catch {}
+                  }
+                }
+                return;
+              }
+              if (parsed.type === 'clear') {
+                curSession.buffer = [];
+                curSession.totalBufferLength = 0;
+                return;
+              }
+              if (parsed.type === 'restart') {
+                try { curSession.proc.kill('SIGKILL'); } catch {}
+                persistentTerminalSessions.delete(sessionKey);
+                const freshSession = getOrCreateTerminalSession(targetProject, tabId, effectivePath, isWin);
+                freshSession.clients.add(ws);
+                if (freshSession.buffer.length > 0) {
+                  ws.send(freshSession.buffer.join(''));
                 }
                 return;
               }
             } catch {}
           }
 
-          // In non-PTY mode, echo keystrokes locally so user can see typed input
-          if (!isPty) {
+          // Echo keystrokes locally in non-PTY mode
+          if (!curSession.isPty) {
             if (str === '\r') {
               ws.send('\r\n');
             } else if (str === '\x7f' || str === '\b') {
@@ -397,23 +482,23 @@ app.prepare()
             }
           }
 
-          if (proc && proc.stdin && proc.stdin.writable) {
-            // Translate carriage return \r to newline \n for pipe-based shells
-            const toWrite = (!isPty && str === '\r') ? '\n' : str;
-            proc.stdin.write(toWrite);
+          if (curSession.proc.stdin && curSession.proc.stdin.writable) {
+            const toWrite = (!curSession.isPty && str === '\r') ? '\n' : str;
+            curSession.proc.stdin.write(toWrite);
           }
         });
 
         ws.on('close', () => {
-          if (proc) {
-            try { proc.kill('SIGTERM'); } catch {}
-            setTimeout(() => {
-              try { proc.kill('SIGKILL'); } catch {}
-            }, 300);
+          const curSession = persistentTerminalSessions.get(sessionKey);
+          if (curSession) {
+            curSession.clients.delete(ws);
+            // DO NOT kill curSession.proc! It continues executing in the background.
           }
         });
       } catch (err) {
-        ws.send(`\r\nFailed to spawn terminal: ${err.message}\r\n`);
+        try {
+          ws.send(`\r\n\x1b[31mFailed to spawn terminal: ${err.message}\x1b[0m\r\n`);
+        } catch {}
       }
     }
   });

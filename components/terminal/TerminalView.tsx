@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState, useImperativeHandle, forwardRef } from 'react';
 import {
   Terminal as TerminalIcon,
   Plus,
@@ -10,7 +10,7 @@ import {
   Minimize2,
   X,
   Eraser,
-  ChevronDown,
+  RotateCw,
 } from 'lucide-react';
 
 interface TerminalTab {
@@ -25,58 +25,131 @@ interface TerminalViewProps {
   onToggleMaximize?: () => void;
 }
 
-export default function TerminalView({
-  projectId,
-  onClose,
-  isMaximized,
-  onToggleMaximize,
-}: TerminalViewProps) {
-  const [tabs, setTabs] = useState<TerminalTab[]>([
-    { id: '1', name: 'Terminal 1' },
-  ]);
-  const [activeTabId, setActiveTabId] = useState<string>('1');
+export interface TabHandle {
+  clear: () => void;
+  restart: () => void;
+  kill: () => void;
+  reconnect: () => void;
+}
 
-  // Ref per tab: { [tabId]: { container, term, fitAddon, ws, status } }
-  const sessionsRef = useRef<{
-    [tabId: string]: {
-      container?: HTMLDivElement | null;
-      term?: any;
-      fitAddon?: any;
-      ws?: WebSocket | null;
-      status: 'connecting' | 'connected' | 'disconnected';
-    };
-  }>({});
+interface TabInstanceProps {
+  tabId: string;
+  projectId: string;
+  isActive: boolean;
+  onStatusChange: (tabId: string, status: 'connecting' | 'connected' | 'disconnected') => void;
+}
 
-  const [, setRenderTrigger] = useState(0);
+const TerminalTabInstance = forwardRef<TabHandle, TabInstanceProps>(function TerminalTabInstance(
+  { tabId, projectId, isActive, onStatusChange },
+  ref
+) {
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const termRef = useRef<any>(null);
+  const fitAddonRef = useRef<any>(null);
+  const wsRef = useRef<WebSocket | null>(null);
+  const isKilledRef = useRef<boolean>(false);
 
-  // Initialize a session for activeTabId
-  useEffect(() => {
-    let mounted = true;
-    const tabId = activeTabId;
+  const safeFit = () => {
+    try {
+      if (fitAddonRef.current && termRef.current && containerRef.current) {
+        fitAddonRef.current.fit();
+        if (termRef.current.cols && termRef.current.rows && wsRef.current?.readyState === WebSocket.OPEN) {
+          wsRef.current.send(
+            JSON.stringify({
+              type: 'resize',
+              cols: termRef.current.cols,
+              rows: termRef.current.rows,
+            })
+          );
+        }
+      }
+    } catch {}
+  };
 
-    if (!sessionsRef.current[tabId]) {
-      sessionsRef.current[tabId] = { status: 'connecting' };
+  const connectWs = (term: any) => {
+    if (wsRef.current) {
+      try { wsRef.current.close(); } catch {}
     }
 
-    async function initSession() {
-      const session = sessionsRef.current[tabId];
-      if (!session || !session.container) return;
+    onStatusChange(tabId, 'connecting');
 
-      // Clean up previous terminal if any for this tab
-      if (session.term) {
-        try { session.term.dispose(); } catch {}
-      }
-      if (session.ws) {
-        try { session.ws.close(); } catch {}
-      }
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const wsUrl = `${protocol}//${window.location.host}/api/ws/terminal?projectId=${encodeURIComponent(
+      projectId
+    )}&tabId=${encodeURIComponent(tabId)}`;
 
-      session.status = 'connecting';
-      setRenderTrigger((r) => r + 1);
+    const ws = new WebSocket(wsUrl);
+    wsRef.current = ws;
+
+    ws.onopen = () => {
+      onStatusChange(tabId, 'connected');
+      safeFit();
+      try { term.focus(); } catch {}
+    };
+
+    ws.onmessage = (event) => {
+      term.write(event.data);
+    };
+
+    ws.onclose = () => {
+      onStatusChange(tabId, 'disconnected');
+      if (!isKilledRef.current) {
+        term.write('\r\n\x1b[90m[Terminal disconnected - click Reconnect to resume session]\x1b[0m\r\n');
+      }
+    };
+
+    ws.onerror = () => {
+      onStatusChange(tabId, 'disconnected');
+      term.write('\r\n\x1b[31m[WebSocket connection error - verify server port & permissions]\x1b[0m\r\n');
+    };
+  };
+
+  useImperativeHandle(ref, () => ({
+    clear: () => {
+      try {
+        termRef.current?.clear();
+        if (wsRef.current?.readyState === WebSocket.OPEN) {
+          wsRef.current.send(JSON.stringify({ type: 'clear' }));
+        }
+      } catch {}
+    },
+    restart: () => {
+      try {
+        if (wsRef.current?.readyState === WebSocket.OPEN) {
+          wsRef.current.send(JSON.stringify({ type: 'restart' }));
+        } else if (termRef.current) {
+          connectWs(termRef.current);
+        }
+      } catch {}
+    },
+    kill: () => {
+      isKilledRef.current = true;
+      try {
+        if (wsRef.current?.readyState === WebSocket.OPEN) {
+          wsRef.current.send(JSON.stringify({ type: 'kill' }));
+        }
+      } catch {}
+      try { wsRef.current?.close(); } catch {}
+      try { termRef.current?.dispose(); } catch {}
+    },
+    reconnect: () => {
+      if (termRef.current) {
+        connectWs(termRef.current);
+      }
+    },
+  }));
+
+  // Initialize terminal once when tab mounts
+  useEffect(() => {
+    let mounted = true;
+
+    async function init() {
+      if (!containerRef.current) return;
 
       const { Terminal } = await import('@xterm/xterm');
       const { FitAddon } = await import('@xterm/addon-fit');
 
-      if (!mounted) return;
+      if (!mounted || !containerRef.current) return;
 
       const term = new Terminal({
         theme: {
@@ -100,126 +173,162 @@ export default function TerminalView({
         cursorBlink: true,
         cursorStyle: 'block',
         convertEol: true,
-        scrollback: 5000,
+        scrollback: 10000,
       });
 
       const fitAddon = new FitAddon();
       term.loadAddon(fitAddon);
 
-      session.container.innerHTML = '';
-      term.open(session.container);
+      containerRef.current.innerHTML = '';
+      term.open(containerRef.current);
 
-      session.term = term;
-      session.fitAddon = fitAddon;
+      termRef.current = term;
+      fitAddonRef.current = fitAddon;
 
-      // Click to focus
-      session.container.onclick = () => {
+      // Click anywhere to focus terminal
+      containerRef.current.onclick = () => {
         try { term.focus(); } catch {}
-      };
-
-      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const wsUrl = `${protocol}//${window.location.host}/api/ws/terminal?projectId=${encodeURIComponent(
-        projectId
-      )}&tabId=${tabId}`;
-      const ws = new WebSocket(wsUrl);
-      session.ws = ws;
-
-      const safeFit = () => {
-        try {
-          fitAddon.fit();
-          if (term.cols && term.rows && ws.readyState === WebSocket.OPEN) {
-            ws.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }));
-          }
-        } catch {}
-      };
-
-      // Auto fit on mount
-      setTimeout(() => {
-        safeFit();
-        try { term.focus(); } catch {}
-      }, 50);
-
-      // Robust ResizeObserver: guarantees xterm automatically fills 100% of newly dragged height & width
-      const resizeObserver = new ResizeObserver(() => {
-        safeFit();
-      });
-      resizeObserver.observe(session.container);
-
-      ws.onopen = () => {
-        if (!mounted) return;
-        session.status = 'connected';
-        setRenderTrigger((r) => r + 1);
-        safeFit();
-        try { term.focus(); } catch {}
-      };
-
-      ws.onmessage = (event) => {
-        term.write(event.data);
-      };
-
-      ws.onclose = () => {
-        if (!mounted) return;
-        session.status = 'disconnected';
-        setRenderTrigger((r) => r + 1);
-        term.write('\r\n\x1b[90m[Terminal process exited / disconnected]\x1b[0m\r\n');
-      };
-
-      ws.onerror = () => {
-        if (!mounted) return;
-        session.status = 'disconnected';
-        setRenderTrigger((r) => r + 1);
-        term.write('\r\n\x1b[31m[WebSocket connection error - verify port & permissions]\x1b[0m\r\n');
       };
 
       term.onData((data: string) => {
-        if (ws.readyState === WebSocket.OPEN) {
-          ws.send(data);
+        if (wsRef.current?.readyState === WebSocket.OPEN) {
+          wsRef.current.send(data);
         }
       });
+
+      connectWs(term);
+
+      // Auto fit
+      setTimeout(() => {
+        if (mounted) safeFit();
+      }, 50);
+
+      const resizeObserver = new ResizeObserver(() => {
+        if (mounted) safeFit();
+      });
+      resizeObserver.observe(containerRef.current);
+
+      return () => {
+        resizeObserver.disconnect();
+      };
     }
 
-    initSession();
+    init();
 
     return () => {
       mounted = false;
+      // When unmounting (e.g. terminal closed or tab changed), DO NOT send kill to backend!
+      // Simply close WebSocket connection so process continues in background.
+      try { wsRef.current?.close(); } catch {}
+      try { termRef.current?.dispose(); } catch {}
     };
-  }, [projectId, activeTabId]);
+  }, [projectId, tabId]);
 
-  // Clean up on component unmount
+  // When tab becomes active, trigger fit and focus
   useEffect(() => {
-    return () => {
-      Object.values(sessionsRef.current).forEach((session) => {
-        try { session.ws?.send(JSON.stringify({ type: 'kill' })); } catch {}
-        try { session.ws?.close(); } catch {}
-        try { session.term?.dispose(); } catch {}
-      });
-    };
-  }, []);
+    if (isActive) {
+      const timer = setTimeout(() => {
+        safeFit();
+        try { termRef.current?.focus(); } catch {}
+      }, 30);
+      return () => clearTimeout(timer);
+    }
+  }, [isActive]);
+
+  return (
+    <div
+      ref={containerRef}
+      className="w-full h-full"
+      style={{
+        display: isActive ? 'block' : 'none',
+        minHeight: '100%',
+        height: '100%',
+        width: '100%',
+      }}
+    />
+  );
+});
+
+export default function TerminalView({
+  projectId,
+  onClose,
+  isMaximized,
+  onToggleMaximize,
+}: TerminalViewProps) {
+  const tabsStorageKey = `devpanel_term_tabs_${projectId}`;
+  const activeTabStorageKey = `devpanel_term_active_${projectId}`;
+
+  const [tabs, setTabs] = useState<TerminalTab[]>(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const stored = localStorage.getItem(tabsStorageKey);
+        if (stored) {
+          const parsed = JSON.parse(stored);
+          if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        }
+      } catch {}
+    }
+    return [{ id: '1', name: 'Terminal 1' }];
+  });
+
+  const [activeTabId, setActiveTabId] = useState<string>(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const stored = localStorage.getItem(activeTabStorageKey);
+        if (stored) return stored;
+      } catch {}
+    }
+    return '1';
+  });
+
+  const [tabStatuses, setTabStatuses] = useState<{
+    [tabId: string]: 'connecting' | 'connected' | 'disconnected';
+  }>({});
+
+  const tabRefs = useRef<{ [tabId: string]: TabHandle | null }>({});
+
+  // Ensure activeTabId always points to a valid tab
+  useEffect(() => {
+    if (!tabs.find((t) => t.id === activeTabId)) {
+      if (tabs.length > 0) {
+        setActiveTabId(tabs[0].id);
+      }
+    }
+  }, [tabs, activeTabId]);
+
+  // Persist tabs
+  useEffect(() => {
+    try {
+      localStorage.setItem(tabsStorageKey, JSON.stringify(tabs));
+    } catch {}
+  }, [tabs, tabsStorageKey]);
+
+  // Persist active tab
+  useEffect(() => {
+    try {
+      localStorage.setItem(activeTabStorageKey, activeTabId);
+    } catch {}
+  }, [activeTabId, activeTabStorageKey]);
 
   const handleAddNewTab = () => {
     const newId = `${Date.now()}`;
-    const newIndex = tabs.length + 1;
-    const newTab = { id: newId, name: `Terminal ${newIndex}` };
+    const nextIndex = tabs.length + 1;
+    const newTab = { id: newId, name: `Terminal ${nextIndex}` };
     setTabs((prev) => [...prev, newTab]);
     setActiveTabId(newId);
   };
 
   const handleKillActiveTab = () => {
-    const session = sessionsRef.current[activeTabId];
-    if (session) {
-      try {
-        session.ws?.send(JSON.stringify({ type: 'kill' }));
-      } catch {}
-      try { session.ws?.close(); } catch {}
-      try { session.term?.dispose(); } catch {}
-      delete sessionsRef.current[activeTabId];
+    const handle = tabRefs.current[activeTabId];
+    if (handle) {
+      handle.kill();
+      delete tabRefs.current[activeTabId];
     }
 
-    if (tabs.length === 1) {
-      // Re-initialize single tab
-      const newId = `${Date.now()}`;
-      setTabs([{ id: newId, name: 'Terminal 1' }]);
-      setActiveTabId(newId);
+    if (tabs.length <= 1) {
+      const freshId = `${Date.now()}`;
+      setTabs([{ id: freshId, name: 'Terminal 1' }]);
+      setActiveTabId(freshId);
     } else {
       const remaining = tabs.filter((t) => t.id !== activeTabId);
       setTabs(remaining);
@@ -228,27 +337,18 @@ export default function TerminalView({
   };
 
   const handleClear = () => {
-    const session = sessionsRef.current[activeTabId];
-    if (session?.term) {
-      try {
-        session.term.clear();
-      } catch {}
-    }
+    tabRefs.current[activeTabId]?.clear();
   };
 
   const handleRestart = () => {
-    const session = sessionsRef.current[activeTabId];
-    if (session) {
-      try { session.ws?.send(JSON.stringify({ type: 'kill' })); } catch {}
-      try { session.ws?.close(); } catch {}
-      try { session.term?.dispose(); } catch {}
-      delete sessionsRef.current[activeTabId];
-    }
-    setRenderTrigger((r) => r + 1);
+    tabRefs.current[activeTabId]?.restart();
   };
 
-  const activeSession = sessionsRef.current[activeTabId];
-  const activeStatus = activeSession?.status || 'connecting';
+  const handleReconnect = () => {
+    tabRefs.current[activeTabId]?.reconnect();
+  };
+
+  const activeStatus = tabStatuses[activeTabId] || 'connecting';
 
   return (
     <div className="w-full h-full bg-[#090d16] flex flex-col overflow-hidden select-none">
@@ -258,6 +358,7 @@ export default function TerminalView({
         <div className="flex items-center space-x-1 overflow-x-auto max-w-[65%]">
           {tabs.map((tab) => {
             const isActive = tab.id === activeTabId;
+            const status = tabStatuses[tab.id] || 'connecting';
             return (
               <div
                 key={tab.id}
@@ -273,9 +374,9 @@ export default function TerminalView({
                 {isActive && (
                   <span
                     className={`w-1.5 h-1.5 rounded-full ${
-                      activeStatus === 'connected'
+                      status === 'connected'
                         ? 'bg-emerald-400'
-                        : activeStatus === 'connecting'
+                        : status === 'connecting'
                         ? 'bg-amber-400 animate-pulse'
                         : 'bg-rose-400'
                     }`}
@@ -295,8 +396,19 @@ export default function TerminalView({
           </button>
         </div>
 
-        {/* Right Action Tools: Clear, Restart, Kill, Maximize, Close */}
+        {/* Right Action Tools: Reconnect, Clear, Restart, Kill, Maximize, Close */}
         <div className="flex items-center space-x-1 shrink-0 text-gray-400">
+          {activeStatus === 'disconnected' && (
+            <button
+              onClick={handleReconnect}
+              className="px-2 py-0.5 rounded bg-blue-600/20 text-blue-400 hover:bg-blue-600/30 hover:text-blue-300 transition-colors flex items-center gap-1 text-[11px] border border-blue-500/30"
+              title="Reconnect Terminal Session"
+            >
+              <RotateCw className="w-3 h-3" />
+              <span>Reconnect</span>
+            </button>
+          )}
+
           <button
             onClick={handleClear}
             className="p-1 rounded hover:text-white hover:bg-[#1e293b] transition-colors flex items-center gap-1 text-[11px]"
@@ -354,22 +466,20 @@ export default function TerminalView({
 
       {/* Terminal Viewports Container */}
       <div className="flex-1 w-full h-full relative overflow-hidden bg-[#090d16] p-1">
-        {tabs.map((tab) => {
-          const isActive = tab.id === activeTabId;
-          return (
-            <div
-              key={tab.id}
-              ref={(el) => {
-                if (!sessionsRef.current[tab.id]) {
-                  sessionsRef.current[tab.id] = { status: 'connecting' };
-                }
-                sessionsRef.current[tab.id].container = el;
-              }}
-              className={`w-full h-full ${isActive ? 'block' : 'hidden'}`}
-              style={{ minHeight: '100%', height: '100%', width: '100%' }}
-            />
-          );
-        })}
+        {tabs.map((tab) => (
+          <TerminalTabInstance
+            key={tab.id}
+            ref={(el) => {
+              tabRefs.current[tab.id] = el;
+            }}
+            tabId={tab.id}
+            projectId={projectId}
+            isActive={tab.id === activeTabId}
+            onStatusChange={(id, status) => {
+              setTabStatuses((prev) => ({ ...prev, [id]: status }));
+            }}
+          />
+        ))}
       </div>
     </div>
   );

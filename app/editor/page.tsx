@@ -194,11 +194,54 @@ function EditorContent() {
   const [createItemModal, setCreateItemModal] = useState<{ open: boolean; isDirectory: boolean } | null>(null);
   const [newItemName, setNewItemName] = useState('');
 
-  // Terminal
-  const [terminalHeight, setTerminalHeight] = useState(240);
-  const [terminalOpen, setTerminalOpen] = useState(searchParams.get('focus') === 'terminal');
-  const [terminalMaximized, setTerminalMaximized] = useState(false);
+  // Terminal preferences persisted in localStorage
+  const [terminalHeight, setTerminalHeight] = useState<number>(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('devpanel_term_height');
+      if (saved) {
+        const val = parseInt(saved, 10);
+        if (!isNaN(val) && val >= 100 && val <= 1200) return val;
+      }
+    }
+    return 260;
+  });
+
+  const [terminalOpen, setTerminalOpen] = useState<boolean>(() => {
+    if (searchParams.get('focus') === 'terminal') return true;
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('devpanel_term_open_' + (queryProjectId || 'diet-ghazipur'));
+      if (saved !== null) return saved === 'true';
+    }
+    return false;
+  });
+
+  const [terminalMaximized, setTerminalMaximized] = useState<boolean>(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('devpanel_term_maximized');
+      if (saved !== null) return saved === 'true';
+    }
+    return false;
+  });
   const isDragging = useRef(false);
+
+  // Persist terminal state across page reloads and browser sessions
+  useEffect(() => {
+    try {
+      localStorage.setItem('devpanel_term_open_' + projectId, String(terminalOpen));
+    } catch {}
+  }, [terminalOpen, projectId]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('devpanel_term_height', String(terminalHeight));
+    } catch {}
+  }, [terminalHeight]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('devpanel_term_maximized', String(terminalMaximized));
+    } catch {}
+  }, [terminalMaximized]);
 
   // Recycle Bin / Trash states
   const [recycleBinOpen, setRecycleBinOpen] = useState(false);
