@@ -88,7 +88,7 @@ export async function getGitStatus(workspaceId: string): Promise<GitPanelStatus>
     if (remotes.length > 0 && remotes[0].refs.fetch) {
       remoteUrl = remotes[0].refs.fetch;
     }
-  } catch {}
+  } catch { }
 
   const db = getDatabase();
   const proj = db.projects?.find((p) => p.id === workspaceId);
@@ -99,7 +99,7 @@ export async function getGitStatus(workspaceId: string): Promise<GitPanelStatus>
   let currentCommit = '';
   try {
     currentCommit = await git.revparse(['--short', 'HEAD']);
-  } catch {}
+  } catch { }
 
   const files: GitFileStatus[] = [];
   const stagedFiles: GitFileStatus[] = [];
@@ -202,7 +202,7 @@ export async function gitPush(workspaceId: string) {
       try {
         const status = await git.status();
         currentBranch = status.current || 'main';
-      } catch {}
+      } catch { }
       return await git.push(['--set-upstream', 'origin', currentBranch]);
     }
     throw err;
@@ -233,7 +233,7 @@ export async function gitPull(workspaceId: string, options: { protectEnv?: boole
       if (fs.existsSync(full)) {
         try {
           envBackups.set(f, fs.readFileSync(full, 'utf8'));
-        } catch {}
+        } catch { }
       }
     }
   }
@@ -243,7 +243,7 @@ export async function gitPull(workspaceId: string, options: { protectEnv?: boole
   try {
     const status = await git.status();
     currentBranch = status.current || 'main';
-  } catch {}
+  } catch { }
 
   // Execute pull with auto-upstream tracking fallback
   let pullResult: any;
@@ -261,7 +261,7 @@ export async function gitPull(workspaceId: string, options: { protectEnv?: boole
       try {
         const remotes = await git.getRemotes();
         if (remotes.length > 0) remoteName = remotes[0].name;
-      } catch {}
+      } catch { }
 
       try {
         // Try pulling current branch from remote
@@ -275,7 +275,7 @@ export async function gitPull(workspaceId: string, options: { protectEnv?: boole
       // Automatically configure upstream tracking for future pulls
       try {
         await git.branch(['--set-upstream-to', `${remoteName}/${currentBranch}`]);
-      } catch {}
+      } catch { }
     } else {
       throw err;
     }
@@ -293,7 +293,7 @@ export async function gitPull(workspaceId: string, options: { protectEnv?: boole
     envBackups.forEach((content, f) => {
       try {
         fs.writeFileSync(path.join(projectDir, f), content, 'utf8');
-      } catch {}
+      } catch { }
     });
   }
 
@@ -301,7 +301,7 @@ export async function gitPull(workspaceId: string, options: { protectEnv?: boole
   try {
     const status = await git.status();
     currentBranch = status.current || currentBranch;
-  } catch {}
+  } catch { }
 
   // Record in Pull History
   const db = getDatabase();
@@ -364,7 +364,7 @@ export async function gitUndoPull(workspaceId: string, pullId?: string, targetCo
     if (fs.existsSync(full)) {
       try {
         envBackups.set(f, fs.readFileSync(full, 'utf8'));
-      } catch {}
+      } catch { }
     }
   }
 
@@ -375,7 +375,7 @@ export async function gitUndoPull(workspaceId: string, pullId?: string, targetCo
   envBackups.forEach((content, f) => {
     try {
       fs.writeFileSync(path.join(projectDir, f), content, 'utf8');
-    } catch {}
+    } catch { }
   });
 
   if (record) {
@@ -414,7 +414,7 @@ export async function gitRedoPull(workspaceId: string, pullId: string) {
     if (fs.existsSync(full)) {
       try {
         envBackups.set(f, fs.readFileSync(full, 'utf8'));
-      } catch {}
+      } catch { }
     }
   }
 
@@ -425,7 +425,7 @@ export async function gitRedoPull(workspaceId: string, pullId: string) {
   envBackups.forEach((content, f) => {
     try {
       fs.writeFileSync(path.join(projectDir, f), content, 'utf8');
-    } catch {}
+    } catch { }
   });
 
   record.status = 'active';
@@ -463,7 +463,7 @@ export async function setRemoteUrl(workspaceId: string, repoUrl: string) {
     } catch {
       try {
         await git.remote(['set-url', 'origin', cleanUrl]);
-      } catch {}
+      } catch { }
     }
   }
 

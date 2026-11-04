@@ -78,10 +78,16 @@ process.on('uncaughtException', (err) => {
   if (err.code === 'EADDRINUSE') {
     console.error(`\x1b[31m[DevPanel Error] Port ${port} is already in use by another process.\x1b[0m`);
     console.error(`Run: fuser -k ${port}/tcp to free the port and restart.`);
+    process.exit(1);
+  } else if (err.message && (err.message.includes("reading 'bind'") || err.message.includes('setHeader'))) {
+    console.warn('\x1b[33m[DevPanel Warning] Non-fatal Next.js request/upgrade binding ignored.\x1b[0m');
+    return;
+  } else if (err.code === 'ECONNRESET' || err.code === 'EPIPE') {
+    return;
   } else {
     console.error('\x1b[31m[DevPanel Fatal Error]:\x1b[0m', err);
+    process.exit(1);
   }
-  process.exit(1);
 });
 
 process.on('unhandledRejection', (reason) => {
@@ -93,10 +99,10 @@ console.log(`> Initializing DevPanel production engine on ${hostname}:${port}...
 app.prepare()
   .then(() => {
     const server = createServer(async (req, res) => {
-      // Safety check: ensure response is a valid HTTP ServerResponse
-      if (!res || typeof res.setHeader !== 'function') {
-        if (res && typeof res.end === 'function') res.end();
-        return;
+      // Safety check: ensure response has setHeader and getHeader fallbacks
+      if (res) {
+        if (typeof res.setHeader !== 'function') res.setHeader = () => {};
+        if (typeof res.getHeader !== 'function') res.getHeader = () => undefined;
       }
 
       const parsedUrl = parse(req.url, true);
@@ -130,17 +136,23 @@ app.prepare()
 
     const wss = new WebSocketServer({ noServer: true });
 
-  server.on('upgrade', (request, socket, head) => {
-    const { pathname } = parse(request.url, true);
+    // Prepend listener to intercept WebSocket upgrades before Next.js routing can see them
+    server.prependListener('upgrade', (request, socket, head) => {
+      if (socket) {
+        if (typeof socket.setHeader !== 'function') socket.setHeader = () => {};
+        if (typeof socket.getHeader !== 'function') socket.getHeader = () => undefined;
+      }
 
-    if (pathname && (pathname.startsWith('/api/ws/terminal') || pathname.startsWith('/api/ws/metrics'))) {
-      wss.handleUpgrade(request, socket, head, (ws) => {
-        wss.emit('connection', ws, request);
-      });
-    } else {
-      socket.destroy();
-    }
-  });
+      const { pathname } = parse(request.url, true);
+
+      if (pathname && (pathname.startsWith('/api/ws/terminal') || pathname.startsWith('/api/ws/metrics'))) {
+        wss.handleUpgrade(request, socket, head, (ws) => {
+          wss.emit('connection', ws, request);
+        });
+      } else {
+        socket.destroy();
+      }
+    });
 
   wss.on('connection', (ws, request) => {
     const { pathname, query } = parse(request.url, true);
@@ -202,29 +214,36 @@ app.prepare()
     if (pathname === '/api/ws/terminal') {
       const targetProject = query.projectId || query.workspaceId || 'diet-ghazipur';
       const projectPath = getProjectDir(targetProject);
+      const effectivePath = fs.existsSync(projectPath) ? projectPath : __dirname;
 
       ws.send(`\r\n\x1b[1;36m DevPanel Project Terminal\x1b[0m\r\n`);
       ws.send(`\x1b[90mConnected Project: ${targetProject}\x1b[0m\r\n`);
-      ws.send(`\x1b[90mTarget Directory: ${projectPath}\x1b[0m\r\n\r\n`);
+      ws.send(`\x1b[90mTarget Directory: ${effectivePath}\x1b[0m\r\n\r\n`);
 
       const isWin = process.platform === 'win32';
-      const shell = isWin ? 'powershell.exe' : 'bash';
-      const shellArgs = isWin ? ['-NoLogo'] : ['-i'];
+      const shell = isWin ? 'powershell.exe' : (fs.existsSync('/bin/bash') ? '/bin/bash' : 'sh');
+      const shellArgs = isWin ? ['-NoLogo'] : [];
 
       let proc;
       try {
         proc = spawn(shell, shellArgs, {
-          cwd: projectPath,
+          cwd: effectivePath,
           env: {
             ...process.env,
             WORKSPACE_ISOLATED: 'true',
             PATH: process.env.PATH,
             TERM: 'xterm-256color',
             COLORTERM: 'truecolor',
-            PWD: projectPath,
+            PWD: effectivePath,
           },
           shell: false,
         });
+
+        if (proc.stdin && proc.stdin.writable) {
+          if (!isWin) {
+            proc.stdin.write('export PS1="\\u@devpanel:\\w\\$ "\n');
+          }
+        }
 
         proc.stdout.on('data', (data) => {
           if (ws.readyState === WebSocket.OPEN) {
