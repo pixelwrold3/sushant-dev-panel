@@ -193,7 +193,20 @@ export async function commitChanges(workspaceId: string, message: string) {
 
 export async function gitPush(workspaceId: string) {
   const git = getGit(workspaceId);
-  return await git.push();
+  try {
+    return await git.push();
+  } catch (err: any) {
+    const msg = err.message || '';
+    if (msg.includes('set-upstream') || msg.includes('no upstream branch') || msg.includes('has no upstream')) {
+      let currentBranch = 'main';
+      try {
+        const status = await git.status();
+        currentBranch = status.current || 'main';
+      } catch {}
+      return await git.push(['--set-upstream', 'origin', currentBranch]);
+    }
+    throw err;
+  }
 }
 
 /**
@@ -225,8 +238,48 @@ export async function gitPull(workspaceId: string, options: { protectEnv?: boole
     }
   }
 
-  // Execute pull
-  const pullResult = await git.pull();
+  // Detect current branch
+  let currentBranch = 'main';
+  try {
+    const status = await git.status();
+    currentBranch = status.current || 'main';
+  } catch {}
+
+  // Execute pull with auto-upstream tracking fallback
+  let pullResult: any;
+  try {
+    pullResult = await git.pull();
+  } catch (err: any) {
+    const errMsg = err.message || '';
+    if (
+      errMsg.includes('no tracking information') ||
+      errMsg.includes('set-upstream-to') ||
+      errMsg.includes('specify which branch') ||
+      errMsg.includes('There is no tracking information')
+    ) {
+      let remoteName = 'origin';
+      try {
+        const remotes = await git.getRemotes();
+        if (remotes.length > 0) remoteName = remotes[0].name;
+      } catch {}
+
+      try {
+        // Try pulling current branch from remote
+        pullResult = await git.pull(remoteName, currentBranch);
+      } catch {
+        // Fallback: If local is master and remote is main, or vice-versa
+        const altBranch = currentBranch === 'master' ? 'main' : 'master';
+        pullResult = await git.pull(remoteName, altBranch);
+      }
+
+      // Automatically configure upstream tracking for future pulls
+      try {
+        await git.branch(['--set-upstream-to', `${remoteName}/${currentBranch}`]);
+      } catch {}
+    } else {
+      throw err;
+    }
+  }
 
   let postCommit = '';
   try {
@@ -244,11 +297,10 @@ export async function gitPull(workspaceId: string, options: { protectEnv?: boole
     });
   }
 
-  // Get current branch
-  let currentBranch = 'main';
+  // Update current branch if changed
   try {
     const status = await git.status();
-    currentBranch = status.current || 'main';
+    currentBranch = status.current || currentBranch;
   } catch {}
 
   // Record in Pull History
