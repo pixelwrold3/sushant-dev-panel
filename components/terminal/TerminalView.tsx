@@ -190,6 +190,49 @@ const TerminalTabInstance = forwardRef<TabHandle, TabInstanceProps>(function Ter
         try { term.focus(); } catch {}
       };
 
+      // Intercept terminal shortcuts:
+      // - Ctrl+Shift+C / (Ctrl+C when text is highlighted): Copies terminal text (suppresses Chrome Inspect Element & SIGINT)
+      // - Ctrl+Shift+V / Ctrl+V: Pastes text from clipboard into terminal
+      term.attachCustomKeyEventHandler((event: KeyboardEvent) => {
+        if (event.type !== 'keydown') return true;
+
+        const isCtrlOrCmd = event.ctrlKey || event.metaKey;
+
+        // 1. Copy: Ctrl+Shift+C OR (Ctrl+C when text is highlighted)
+        if (
+          (isCtrlOrCmd && event.shiftKey && (event.key === 'c' || event.key === 'C')) ||
+          (isCtrlOrCmd && !event.shiftKey && (event.key === 'c' || event.key === 'C') && term.hasSelection())
+        ) {
+          const selection = term.getSelection();
+          if (selection) {
+            navigator.clipboard.writeText(selection).catch(() => {});
+          }
+          event.preventDefault();
+          event.stopPropagation();
+          return false;
+        }
+
+        // 2. Paste: Ctrl+Shift+V OR Ctrl+V
+        if (
+          (isCtrlOrCmd && event.shiftKey && (event.key === 'v' || event.key === 'V')) ||
+          (isCtrlOrCmd && !event.shiftKey && (event.key === 'v' || event.key === 'V'))
+        ) {
+          navigator.clipboard
+            .readText()
+            .then((clipText) => {
+              if (clipText && wsRef.current?.readyState === WebSocket.OPEN) {
+                wsRef.current.send(clipText);
+              }
+            })
+            .catch(() => {});
+          event.preventDefault();
+          event.stopPropagation();
+          return false;
+        }
+
+        return true;
+      });
+
       term.onData((data: string) => {
         if (wsRef.current?.readyState === WebSocket.OPEN) {
           wsRef.current.send(data);

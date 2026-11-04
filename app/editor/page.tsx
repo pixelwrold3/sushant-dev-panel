@@ -516,16 +516,75 @@ function EditorContent() {
     }
   };
 
-  // Keyboard shortcut Ctrl+S / Cmd+S
+  // Global Keyboard shortcuts with capture phase:
+  // - Ctrl+S / Cmd+S: Save file
+  // - Ctrl+N / Alt+N: Create New File (suppresses browser window when in app mode)
+  // - Ctrl+Shift+N: Create New Folder
+  // - Ctrl+` / Ctrl+~: Toggle Terminal panel
+  // - Ctrl+Shift+C: Copy active file path
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+      const isCtrlOrCmd = e.ctrlKey || e.metaKey;
+
+      // 1. Save File: Ctrl+S
+      if (isCtrlOrCmd && (e.key === 's' || e.key === 'S')) {
         e.preventDefault();
+        e.stopPropagation();
         handleSaveFile();
+        return;
+      }
+
+      // 2. New File: Ctrl+N OR Alt+N (Alt+N is guaranteed across all web browsers without native collision)
+      if (
+        (isCtrlOrCmd && !e.shiftKey && (e.key === 'n' || e.key === 'N')) ||
+        (e.altKey && (e.key === 'n' || e.key === 'N'))
+      ) {
+        e.preventDefault();
+        e.stopPropagation();
+        setCreateItemModal({ open: true, isDirectory: false });
+        setNewItemName('');
+        return;
+      }
+
+      // 3. New Folder: Ctrl+Shift+N OR Alt+Shift+N
+      if (
+        (isCtrlOrCmd && e.shiftKey && (e.key === 'n' || e.key === 'N')) ||
+        (e.altKey && e.shiftKey && (e.key === 'n' || e.key === 'N'))
+      ) {
+        e.preventDefault();
+        e.stopPropagation();
+        setCreateItemModal({ open: true, isDirectory: true });
+        setNewItemName('');
+        return;
+      }
+
+      // 4. Toggle Terminal: Ctrl+` or Ctrl+~
+      if (isCtrlOrCmd && (e.key === '`' || e.key === '~')) {
+        e.preventDefault();
+        e.stopPropagation();
+        setTerminalOpen((prev) => !prev);
+        return;
+      }
+
+      // 5. Copy Active File Path: Ctrl+Shift+C (when not inside terminal)
+      if (isCtrlOrCmd && e.shiftKey && (e.key === 'c' || e.key === 'C')) {
+        // If an editor tab is open, copy path to clipboard
+        if (activeTabPath) {
+          e.preventDefault();
+          e.stopPropagation();
+          navigator.clipboard
+            .writeText(activeTabPath)
+            .then(() => {
+              setActionMessage(`Copied path: ${activeTabPath}`);
+              setTimeout(() => setActionMessage(null), 2500);
+            })
+            .catch(() => {});
+        }
       }
     };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
+
+    window.addEventListener('keydown', handleKeyDown, { capture: true });
+    return () => window.removeEventListener('keydown', handleKeyDown, { capture: true });
   }, [activeTabPath, openTabs, projectId]);
 
   // Move item to Recycle Bin
@@ -1287,6 +1346,26 @@ function EditorContent() {
                 theme="vs-dark"
                 value={activeTab.content}
                 onChange={handleEditorChange}
+                onMount={(editor, monaco) => {
+                  // Ctrl+N in Monaco -> New File
+                  editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyN, () => {
+                    setCreateItemModal({ open: true, isDirectory: false });
+                    setNewItemName('');
+                  });
+                  // Alt+N in Monaco -> New File
+                  editor.addCommand(monaco.KeyMod.Alt | monaco.KeyCode.KeyN, () => {
+                    setCreateItemModal({ open: true, isDirectory: false });
+                    setNewItemName('');
+                  });
+                  // Ctrl+S in Monaco -> Save File
+                  editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
+                    handleSaveFile();
+                  });
+                  // Ctrl+` in Monaco -> Toggle Terminal
+                  editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Backquote, () => {
+                    setTerminalOpen((prev) => !prev);
+                  });
+                }}
                 options={{
                   fontSize: 13,
                   fontFamily: 'JetBrains Mono, Menlo, monospace',
