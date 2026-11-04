@@ -122,6 +122,10 @@ export function listWorkspaceFiles(projectId: string, currentDir: string = '', m
   const result: FileItem[] = [];
 
   for (const entry of entries) {
+    if (entry.name === '.devpanel_trash') {
+      continue; // Never show Recycle Bin internal storage in regular file tree
+    }
+
     if (entry.name === '.git' || entry.name === 'node_modules' || entry.name === '.next') {
       result.push({
         name: entry.name,
@@ -225,6 +229,27 @@ export function renameWorkspaceItem(projectId: string, oldPath: string, newPath:
   }
 
   fs.renameSync(oldTarget, newTarget);
+}
+
+export function copyWorkspaceItem(projectId: string, srcPath: string, destPath: string): void {
+  const oldTarget = resolveWorkspacePath(projectId, srcPath);
+  const newTarget = resolveWorkspacePath(projectId, destPath);
+
+  if (!fs.existsSync(oldTarget)) {
+    throw new Error('Source item does not exist.');
+  }
+
+  const newParent = path.dirname(newTarget);
+  if (!fs.existsSync(newParent)) {
+    fs.mkdirSync(newParent, { recursive: true });
+  }
+
+  const stat = fs.statSync(oldTarget);
+  if (stat.isDirectory()) {
+    fs.cpSync(oldTarget, newTarget, { recursive: true });
+  } else {
+    fs.copyFileSync(oldTarget, newTarget);
+  }
 }
 
 export function deleteWorkspaceItem(projectId: string, itemPath: string): void {

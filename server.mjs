@@ -365,6 +365,27 @@ app.prepare()
         ws.on('message', (msg) => {
           const str = msg.toString();
 
+          // Check for JSON control messages (e.g. resize, kill)
+          if (str.startsWith('{') && str.endsWith('}')) {
+            try {
+              const parsed = JSON.parse(str);
+              if (parsed.type === 'resize' && parsed.cols && parsed.rows) {
+                const cols = parseInt(parsed.cols, 10);
+                const rows = parseInt(parsed.rows, 10);
+                if (proc && proc.stdout && typeof proc.stdout.setWindowSize === 'function') {
+                  try { proc.stdout.setWindowSize(rows, cols); } catch {}
+                }
+                return;
+              }
+              if (parsed.type === 'kill') {
+                if (proc) {
+                  try { proc.kill('SIGKILL'); } catch {}
+                }
+                return;
+              }
+            } catch {}
+          }
+
           // In non-PTY mode, echo keystrokes locally so user can see typed input
           if (!isPty) {
             if (str === '\r') {
@@ -385,7 +406,10 @@ app.prepare()
 
         ws.on('close', () => {
           if (proc) {
-            try { proc.kill(); } catch {}
+            try { proc.kill('SIGTERM'); } catch {}
+            setTimeout(() => {
+              try { proc.kill('SIGKILL'); } catch {}
+            }, 300);
           }
         });
       } catch (err) {

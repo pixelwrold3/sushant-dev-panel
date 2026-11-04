@@ -39,6 +39,12 @@ import {
   MoreHorizontal,
   Layers,
   Database,
+  Scissors,
+  Copy,
+  ClipboardPaste,
+  Download,
+  Archive,
+  FileEdit,
 } from 'lucide-react';
 import TerminalView from '@/components/terminal/TerminalView';
 
@@ -191,7 +197,35 @@ function EditorContent() {
   // Terminal
   const [terminalHeight, setTerminalHeight] = useState(240);
   const [terminalOpen, setTerminalOpen] = useState(searchParams.get('focus') === 'terminal');
+  const [terminalMaximized, setTerminalMaximized] = useState(false);
   const isDragging = useRef(false);
+
+  // Recycle Bin / Trash states
+  const [recycleBinOpen, setRecycleBinOpen] = useState(false);
+  const [trashItems, setTrashItems] = useState<any[]>([]);
+
+  // File Explorer Right-Click Context Menu
+  const [contextMenu, setContextMenu] = useState<{
+    x: number;
+    y: number;
+    node: any | null;
+  } | null>(null);
+
+  // File Clipboard (Cut / Copy / Paste)
+  const [clipboard, setClipboard] = useState<{
+    action: 'copy' | 'cut';
+    path: string;
+    name: string;
+    isDir: boolean;
+  } | null>(null);
+
+  // Rename File/Folder Modal
+  const [renameModal, setRenameModal] = useState<{
+    open: boolean;
+    oldPath: string;
+    currentName: string;
+  } | null>(null);
+  const [renameNewName, setRenameNewName] = useState('');
 
   // VS Code Sidebar Resizing state (slide left/right to resize)
   const [sidebarWidth, setSidebarWidth] = useState(260);
@@ -216,6 +250,16 @@ function EditorContent() {
     document.removeEventListener('mouseup', handleSidebarMouseUp);
   };
 
+  const loadTrashItems = async (pId: string) => {
+    try {
+      const res = await fetch(`/api/files/trash?projectId=${encodeURIComponent(pId)}`);
+      if (res.ok) {
+        const data = await res.json();
+        setTrashItems(data.items || []);
+      }
+    } catch {}
+  };
+
   const loadFiles = async (pId: string) => {
     try {
       const res = await fetch(`/api/files?projectId=${encodeURIComponent(pId)}`);
@@ -223,10 +267,18 @@ function EditorContent() {
       if (data.files) {
         setFileTree(data.files);
       }
+      loadTrashItems(pId);
     } catch (err) {
       console.error(err);
     }
   };
+
+  // Close context menu on any global click
+  useEffect(() => {
+    const handleCloseMenu = () => setContextMenu(null);
+    window.addEventListener('click', handleCloseMenu);
+    return () => window.removeEventListener('click', handleCloseMenu);
+  }, []);
 
   const loadGitData = async (pId: string) => {
     try {
@@ -433,25 +485,208 @@ function EditorContent() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [activeTabPath, openTabs, projectId]);
 
-  const handleDeleteItem = async (filePath: string, e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (!confirm(`Are you sure you want to permanently delete "${filePath}"?`)) return;
+  // Move item to Recycle Bin
+  const handleMoveToTrash = async (filePath: string, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    if (!confirm(`Move "${filePath}" to Recycle Bin? (You can restore it anytime)`)) return;
 
     try {
-      const res = await fetch(
-        `/api/files?projectId=${encodeURIComponent(projectId)}&path=${encodeURIComponent(filePath)}`,
-        { method: 'DELETE' }
-      );
+      const res = await fetch('/api/files/trash', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          projectId,
+          action: 'trash',
+          path: filePath,
+        }),
+      });
       if (res.ok) {
         setOpenTabs((prev) => prev.filter((t) => !t.path.startsWith(filePath)));
         if (activeTabPath?.startsWith(filePath)) setActiveTabPath(null);
         loadFiles(projectId);
       } else {
         const d = await res.json();
-        alert(d.error);
+        alert(d.error || 'Failed to move to Recycle Bin');
       }
     } catch (err: any) {
       alert(err.message);
+    }
+  };
+
+  const handleRestoreFromTrash = async (trashId: string) => {
+    try {
+      const res = await fetch('/api/files/trash', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          projectId,
+          action: 'restore',
+          trashId,
+        }),
+      });
+      if (res.ok) {
+        loadTrashItems(projectId);
+        loadFiles(projectId);
+      } else {
+        const d = await res.json();
+        alert(d.error || 'Restore failed');
+      }
+    } catch (err: any) {
+      alert(err.message);
+    }
+  };
+
+  const handleDeletePermanent = async (trashId: string) => {
+    if (!confirm('Permanently delete this item? This CANNOT be restored!')) return;
+    try {
+      const res = await fetch('/api/files/trash', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          projectId,
+          action: 'delete_permanent',
+          trashId,
+        }),
+      });
+      if (res.ok) {
+        loadTrashItems(projectId);
+      } else {
+        const d = await res.json();
+        alert(d.error || 'Permanent delete failed');
+      }
+    } catch (err: any) {
+      alert(err.message);
+    }
+  };
+
+  const handleEmptyRecycleBin = async () => {
+    if (!confirm('Are you sure you want to permanently delete ALL items in the Recycle Bin?')) return;
+    try {
+      const res = await fetch('/api/files/trash', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          projectId,
+          action: 'empty',
+        }),
+      });
+      if (res.ok) {
+        loadTrashItems(projectId);
+      } else {
+        const d = await res.json();
+        alert(d.error || 'Empty bin failed');
+      }
+    } catch (err: any) {
+      alert(err.message);
+    }
+  };
+
+  // Right-Click Context Menu Trigger
+  const handleContextMenu = (e: React.MouseEvent, node: any | null) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const menuWidth = 190;
+    const menuHeight = 260;
+    const x = e.clientX + menuWidth > window.innerWidth ? window.innerWidth - menuWidth - 10 : e.clientX;
+    const y = e.clientY + menuHeight > window.innerHeight ? window.innerHeight - menuHeight - 10 : e.clientY;
+    setContextMenu({ x, y, node });
+  };
+
+  // Paste Action
+  const handlePaste = async (targetFolder: string) => {
+    if (!clipboard) return;
+
+    try {
+      const destPath = targetFolder ? `${targetFolder}/${clipboard.name}` : clipboard.name;
+      const res = await fetch('/api/files', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          projectId,
+          action: clipboard.action === 'copy' ? 'copy' : 'move',
+          srcPath: clipboard.path,
+          destPath,
+        }),
+      });
+
+      if (res.ok) {
+        if (clipboard.action === 'cut') {
+          setClipboard(null);
+        }
+        loadFiles(projectId);
+      } else {
+        const d = await res.json();
+        alert(d.error || 'Paste failed');
+      }
+    } catch (err: any) {
+      alert(`Paste error: ${err.message}`);
+    }
+  };
+
+  // Download File Action
+  const handleDownloadFile = async (filePath: string, fileName: string) => {
+    try {
+      const res = await fetch(
+        `/api/files?projectId=${encodeURIComponent(projectId)}&path=${encodeURIComponent(filePath)}`
+      );
+      if (res.ok) {
+        const data = await res.json();
+        const blob = new Blob([data.content || ''], { type: 'text/plain' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = fileName;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+      }
+    } catch (err: any) {
+      alert(`Download failed: ${err.message}`);
+    }
+  };
+
+  // Rename Action
+  const handleRenameSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!renameModal || !renameNewName.trim()) return;
+
+    const parentDir = renameModal.oldPath.includes('/')
+      ? renameModal.oldPath.substring(0, renameModal.oldPath.lastIndexOf('/'))
+      : '';
+    const newPath = parentDir ? `${parentDir}/${renameNewName.trim()}` : renameNewName.trim();
+
+    try {
+      const res = await fetch('/api/files', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          projectId,
+          oldPath: renameModal.oldPath,
+          newPath,
+        }),
+      });
+
+      if (res.ok) {
+        setOpenTabs((prev) =>
+          prev.map((t) =>
+            t.path === renameModal.oldPath
+              ? { ...t, path: newPath, name: renameNewName.trim() }
+              : t
+          )
+        );
+        if (activeTabPath === renameModal.oldPath) {
+          setActiveTabPath(newPath);
+        }
+        setRenameModal(null);
+        setRenameNewName('');
+        loadFiles(projectId);
+      } else {
+        const d = await res.json();
+        alert(d.error || 'Rename failed');
+      }
+    } catch (err: any) {
+      alert(`Rename error: ${err.message}`);
     }
   };
 
@@ -689,6 +924,7 @@ function EditorContent() {
               handleOpenFile(node.path, node.name);
             }
           }}
+          onContextMenu={(e) => handleContextMenu(e, node)}
           style={{ paddingLeft: `${depth * 14 + 6}px` }}
           className={`flex items-center justify-between pr-2 py-1 rounded text-xs cursor-pointer group transition-colors ${
             activeTabPath === node.path
@@ -722,9 +958,9 @@ function EditorContent() {
           </div>
 
           <button
-            onClick={(e) => handleDeleteItem(node.path, e)}
+            onClick={(e) => handleMoveToTrash(node.path, e)}
             className="opacity-0 group-hover:opacity-100 text-gray-500 hover:text-rose-400 p-0.5"
-            title="Delete"
+            title="Move to Recycle Bin"
           >
             <Trash2 className="w-3 h-3" />
           </button>
@@ -927,6 +1163,18 @@ function EditorContent() {
                 <UnfoldHorizontal className="w-3.5 h-3.5" />
               </button>
               <button
+                onClick={() => setRecycleBinOpen(true)}
+                className="p-1 hover:text-white text-gray-400 rounded hover:bg-[#1e293b] relative"
+                title="Recycle Bin (View and restore deleted files)"
+              >
+                <Trash2 className="w-3.5 h-3.5 text-rose-400" />
+                {trashItems.length > 0 && (
+                  <span className="absolute -top-1 -right-1 w-3.5 h-3.5 bg-rose-500 text-[9px] font-bold text-white rounded-full flex items-center justify-center">
+                    {trashItems.length > 9 ? '9+' : trashItems.length}
+                  </span>
+                )}
+              </button>
+              <button
                 onClick={() => loadFiles(projectId)}
                 className="p-1 hover:text-white text-gray-400 rounded hover:bg-[#1e293b]"
                 title="Refresh Files"
@@ -936,7 +1184,10 @@ function EditorContent() {
             </div>
           </div>
 
-          <div className="flex-1 overflow-y-auto p-1.5 space-y-0.5">
+          <div
+            onContextMenu={(e) => handleContextMenu(e, null)}
+            className="flex-1 overflow-y-auto p-1.5 space-y-0.5"
+          >
             {fileTree.length === 0 ? (
               <div className="text-xs text-gray-500 p-3 text-center">
                 Directory empty or loading files for {currentProjectObj?.name}...
@@ -1020,17 +1271,26 @@ function EditorContent() {
           {/* Bottom Resizable Terminal targeting the Connected Project */}
           {terminalOpen && (
             <div
-              style={{ height: `${terminalHeight}px` }}
-              className="border-t border-[#1e293b] relative flex flex-col bg-[#090d16]"
+              style={{ height: terminalMaximized ? '100%' : `${terminalHeight}px` }}
+              className={`border-t border-[#1e293b] relative flex flex-col bg-[#090d16] ${
+                terminalMaximized ? 'absolute inset-0 z-40' : ''
+              }`}
             >
-              <div
-                onMouseDown={handleMouseDown}
-                className="h-1.5 w-full bg-[#1e293b] hover:bg-blue-500 cursor-ns-resize transition-colors flex items-center justify-center"
-              >
-                <div className="w-8 h-0.5 bg-gray-500 rounded" />
-              </div>
+              {!terminalMaximized && (
+                <div
+                  onMouseDown={handleMouseDown}
+                  className="h-1.5 w-full bg-[#1e293b] hover:bg-blue-500 cursor-ns-resize transition-colors flex items-center justify-center shrink-0"
+                >
+                  <div className="w-8 h-0.5 bg-gray-500 rounded" />
+                </div>
+              )}
               <div className="flex-1 overflow-hidden">
-                <TerminalView projectId={projectId} />
+                <TerminalView
+                  projectId={projectId}
+                  onClose={() => setTerminalOpen(false)}
+                  isMaximized={terminalMaximized}
+                  onToggleMaximize={() => setTerminalMaximized(!terminalMaximized)}
+                />
               </div>
             </div>
           )}
@@ -1570,40 +1830,313 @@ function EditorContent() {
         </div>
       )}
 
-      {/* New File / Folder Modal */}
-      {createItemModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
-          <form
-            onSubmit={handleCreateSubmit}
-            className="w-full max-w-sm bg-[#0f172a] border border-[#1e293b] rounded-xl p-5 shadow-2xl"
-          >
-            <h3 className="text-sm font-semibold text-white mb-3">
-              Create New {createItemModal.isDirectory ? 'Folder' : 'File'}
-            </h3>
-            <input
-              type="text"
-              autoFocus
-              placeholder={createItemModal.isDirectory ? 'e.g. components' : 'e.g. index.ts'}
-              value={newItemName}
-              onChange={(e) => setNewItemName(e.target.value)}
-              className="w-full bg-[#090d16] border border-[#1e293b] rounded-lg px-3 py-2 text-xs text-gray-200 placeholder-gray-500 focus:outline-none focus:border-blue-500 mb-4"
-            />
-            <div className="flex items-center justify-end space-x-2">
+      {/* Right Click File Context Menu */}
+      {contextMenu && (
+        <div
+          style={{ top: `${contextMenu.y}px`, left: `${contextMenu.x}px` }}
+          className="fixed z-50 min-w-[190px] bg-[#0f172a] border border-[#1e293b] rounded-lg shadow-2xl py-1 text-xs text-gray-200 backdrop-blur-md animate-in fade-in zoom-in-95 duration-100"
+          onClick={(e) => e.stopPropagation()}
+        >
+          {contextMenu.node && (
+            <>
               <button
-                type="button"
-                onClick={() => setCreateItemModal(null)}
-                className="px-3 py-1.5 rounded text-xs text-gray-400 hover:text-white"
+                onClick={() => {
+                  setRenameModal({
+                    open: true,
+                    oldPath: contextMenu.node.path,
+                    currentName: contextMenu.node.name,
+                  });
+                  setRenameNewName(contextMenu.node.name);
+                  setContextMenu(null);
+                }}
+                className="w-full px-3 py-1.5 text-left hover:bg-blue-600/30 hover:text-white flex items-center gap-2 transition-colors"
               >
-                Cancel
+                <FileEdit className="w-3.5 h-3.5 text-blue-400" />
+                <span>Rename</span>
               </button>
+
               <button
-                type="submit"
-                className="px-3.5 py-1.5 rounded bg-blue-600 hover:bg-blue-500 text-white text-xs font-medium"
+                onClick={() => {
+                  setClipboard({
+                    action: 'cut',
+                    path: contextMenu.node.path,
+                    name: contextMenu.node.name,
+                    isDir: contextMenu.node.type === 'directory',
+                  });
+                  setContextMenu(null);
+                }}
+                className="w-full px-3 py-1.5 text-left hover:bg-blue-600/30 hover:text-white flex items-center gap-2 transition-colors"
               >
-                Create
+                <Scissors className="w-3.5 h-3.5 text-amber-400" />
+                <span>Cut</span>
+              </button>
+
+              <button
+                onClick={() => {
+                  setClipboard({
+                    action: 'copy',
+                    path: contextMenu.node.path,
+                    name: contextMenu.node.name,
+                    isDir: contextMenu.node.type === 'directory',
+                  });
+                  setContextMenu(null);
+                }}
+                className="w-full px-3 py-1.5 text-left hover:bg-blue-600/30 hover:text-white flex items-center gap-2 transition-colors"
+              >
+                <Copy className="w-3.5 h-3.5 text-emerald-400" />
+                <span>Copy</span>
+              </button>
+
+              {contextMenu.node.type === 'file' && (
+                <button
+                  onClick={() => {
+                    handleDownloadFile(contextMenu.node.path, contextMenu.node.name);
+                    setContextMenu(null);
+                  }}
+                  className="w-full px-3 py-1.5 text-left hover:bg-blue-600/30 hover:text-white flex items-center gap-2 transition-colors"
+                >
+                  <Download className="w-3.5 h-3.5 text-sky-400" />
+                  <span>Download</span>
+                </button>
+              )}
+
+              <div className="h-[1px] bg-[#1e293b] my-1" />
+            </>
+          )}
+
+          {/* Paste item */}
+          {clipboard && (
+            <button
+              onClick={() => {
+                const targetFolder = contextMenu.node
+                  ? contextMenu.node.type === 'directory'
+                    ? contextMenu.node.path
+                    : contextMenu.node.path.includes('/')
+                    ? contextMenu.node.path.substring(0, contextMenu.node.path.lastIndexOf('/'))
+                    : ''
+                  : '';
+                handlePaste(targetFolder);
+                setContextMenu(null);
+              }}
+              className="w-full px-3 py-1.5 text-left hover:bg-blue-600/30 hover:text-white flex items-center gap-2 transition-colors"
+            >
+              <ClipboardPaste className="w-3.5 h-3.5 text-purple-400" />
+              <span>Paste ({clipboard.name})</span>
+            </button>
+          )}
+
+          {/* New file / folder */}
+          <button
+            onClick={() => {
+              const targetFolder = contextMenu.node
+                ? contextMenu.node.type === 'directory'
+                  ? `${contextMenu.node.path}/`
+                  : contextMenu.node.path.includes('/')
+                  ? `${contextMenu.node.path.substring(0, contextMenu.node.path.lastIndexOf('/'))}/`
+                  : ''
+                : '';
+              setNewItemName(targetFolder);
+              setCreateItemModal({ open: true, isDirectory: false });
+              setContextMenu(null);
+            }}
+            className="w-full px-3 py-1.5 text-left hover:bg-blue-600/30 hover:text-white flex items-center gap-2 transition-colors"
+          >
+            <FilePlus className="w-3.5 h-3.5 text-blue-400" />
+            <span>New File</span>
+          </button>
+
+          <button
+            onClick={() => {
+              const targetFolder = contextMenu.node
+                ? contextMenu.node.type === 'directory'
+                  ? `${contextMenu.node.path}/`
+                  : contextMenu.node.path.includes('/')
+                  ? `${contextMenu.node.path.substring(0, contextMenu.node.path.lastIndexOf('/'))}/`
+                  : ''
+                : '';
+              setNewItemName(targetFolder);
+              setCreateItemModal({ open: true, isDirectory: true });
+              setContextMenu(null);
+            }}
+            className="w-full px-3 py-1.5 text-left hover:bg-blue-600/30 hover:text-white flex items-center gap-2 transition-colors"
+          >
+            <FolderPlus className="w-3.5 h-3.5 text-blue-400" />
+            <span>New Folder</span>
+          </button>
+
+          {contextMenu.node && (
+            <>
+              <div className="h-[1px] bg-[#1e293b] my-1" />
+              <button
+                onClick={() => {
+                  handleMoveToTrash(contextMenu.node.path);
+                  setContextMenu(null);
+                }}
+                className="w-full px-3 py-1.5 text-left hover:bg-rose-600/30 text-rose-400 hover:text-rose-300 flex items-center gap-2 transition-colors"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>Move to Recycle Bin</span>
+              </button>
+            </>
+          )}
+        </div>
+      )}
+
+      {/* Recycle Bin (Trash) Modal */}
+      {recycleBinOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm">
+          <div className="w-full max-w-2xl bg-[#0f172a] border border-[#1e293b] rounded-xl shadow-2xl flex flex-col max-h-[80vh] overflow-hidden">
+            {/* Modal Header */}
+            <div className="flex items-center justify-between border-b border-[#1e293b] px-5 py-3.5 bg-[#0d1322]">
+              <div className="flex items-center gap-2.5">
+                <div className="p-1.5 rounded-lg bg-rose-500/10 border border-rose-500/30 text-rose-400">
+                  <Trash2 className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-semibold text-white">
+                    Recycle Bin ({currentProjectObj?.name || projectId})
+                  </h3>
+                  <p className="text-[11px] text-gray-400">
+                    Deleted files are preserved here and can be restored back anytime.
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setRecycleBinOpen(false)}
+                className="text-gray-400 hover:text-white p-1 rounded-lg hover:bg-[#1e293b] transition-colors"
+              >
+                <X className="w-4 h-4" />
               </button>
             </div>
-          </form>
+
+            {/* Trash Items List */}
+            <div className="flex-1 overflow-y-auto p-4 space-y-2">
+              {trashItems.length === 0 ? (
+                <div className="py-12 text-center text-gray-400 space-y-2">
+                  <div className="w-12 h-12 rounded-full bg-[#131e36] border border-[#1e293b] flex items-center justify-center mx-auto text-gray-500">
+                    <Trash2 className="w-6 h-6" />
+                  </div>
+                  <p className="text-sm font-medium text-gray-300">Recycle Bin is empty</p>
+                  <p className="text-xs text-gray-500">Files and folders you delete will appear here safely.</p>
+                </div>
+              ) : (
+                trashItems.map((item) => (
+                  <div
+                    key={item.id}
+                    className="flex items-center justify-between p-3 rounded-lg bg-[#090d16] border border-[#1e293b] hover:border-gray-700 transition-colors"
+                  >
+                    <div className="flex items-center space-x-3 min-w-0">
+                      {item.type === 'directory' ? (
+                        <Folder className="w-4 h-4 text-blue-400 shrink-0" />
+                      ) : (
+                        <FileText className="w-4 h-4 text-emerald-400 shrink-0" />
+                      )}
+                      <div className="truncate">
+                        <div className="text-xs font-medium text-white truncate">{item.name}</div>
+                        <div className="text-[11px] text-gray-500 truncate font-mono">
+                          Original: {item.originalPath} &bull; Deleted:{' '}
+                          {new Date(item.trashedAt).toLocaleString('en-IN', {
+                            timeZone: 'Asia/Kolkata',
+                            month: 'short',
+                            day: 'numeric',
+                            hour: '2-digit',
+                            minute: '2-digit',
+                          })}{' '}
+                          IST
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center space-x-2 shrink-0">
+                      <button
+                        onClick={() => handleRestoreFromTrash(item.id)}
+                        className="flex items-center gap-1 px-2.5 py-1 rounded bg-blue-600/20 hover:bg-blue-600/30 border border-blue-500/30 text-xs text-blue-400 hover:text-blue-300 transition-colors"
+                        title="Restore to original location"
+                      >
+                        <RotateCcw className="w-3.5 h-3.5" />
+                        <span>Restore</span>
+                      </button>
+                      <button
+                        onClick={() => handleDeletePermanent(item.id)}
+                        className="flex items-center gap-1 px-2 py-1 rounded bg-rose-600/20 hover:bg-rose-600/30 border border-rose-500/30 text-xs text-rose-400 hover:text-rose-300 transition-colors"
+                        title="Delete permanently"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+
+            {/* Modal Footer */}
+            {trashItems.length > 0 && (
+              <div className="border-t border-[#1e293b] px-5 py-3 bg-[#0d1322] flex items-center justify-between">
+                <span className="text-xs text-gray-400">
+                  {trashItems.length} {trashItems.length === 1 ? 'item' : 'items'} in Recycle Bin
+                </span>
+                <button
+                  onClick={handleEmptyRecycleBin}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 text-xs font-medium text-white transition-colors"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>Empty Recycle Bin</span>
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Rename File / Folder Modal */}
+      {renameModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm">
+          <div className="w-full max-w-sm bg-[#0f172a] border border-[#1e293b] rounded-xl shadow-2xl p-5 space-y-4">
+            <div className="flex items-center justify-between border-b border-[#1e293b] pb-3">
+              <h3 className="text-sm font-semibold text-white flex items-center gap-2">
+                <FileEdit className="w-4 h-4 text-blue-400" />
+                Rename Item
+              </h3>
+              <button
+                onClick={() => setRenameModal(null)}
+                className="text-gray-400 hover:text-white"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleRenameSubmit} className="space-y-4">
+              <div>
+                <label className="text-xs text-gray-300 font-medium block mb-1">
+                  Enter new name for <span className="font-mono text-blue-400">{renameModal.currentName}</span>:
+                </label>
+                <input
+                  type="text"
+                  required
+                  autoFocus
+                  value={renameNewName}
+                  onChange={(e) => setRenameNewName(e.target.value)}
+                  className="w-full bg-[#090d16] border border-[#1e293b] rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-blue-500"
+                />
+              </div>
+
+              <div className="flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setRenameModal(null)}
+                  className="px-3 py-1.5 rounded text-xs text-gray-400 hover:text-white hover:bg-[#1e293b]"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="px-4 py-1.5 rounded text-xs font-medium bg-blue-600 hover:bg-blue-500 text-white"
+                >
+                  Rename
+                </button>
+              </div>
+            </form>
+          </div>
         </div>
       )}
     </div>

@@ -7,6 +7,7 @@ import {
   createWorkspaceItem,
   renameWorkspaceItem,
   deleteWorkspaceItem,
+  copyWorkspaceItem,
 } from '@/lib/filesystem/workspace';
 
 export async function GET(req: NextRequest) {
@@ -63,8 +64,35 @@ export async function POST(req: NextRequest) {
     req,
     async (r, user) => {
       const body = await req.json();
-      const { projectId, workspaceId, path, isDirectory } = body;
+      const { projectId, workspaceId, path, isDirectory, action, srcPath, destPath } = body;
       const targetId = projectId || workspaceId || 'diet-ghazipur';
+      const ip = getClientIp(req);
+
+      if (action === 'copy') {
+        if (!srcPath || !destPath) {
+          return NextResponse.json({ error: 'srcPath and destPath are required for copy' }, { status: 400 });
+        }
+        try {
+          copyWorkspaceItem(targetId, srcPath, destPath);
+          logAudit(user.email, 'File Copied', `Copied ${srcPath} to ${destPath}`, `${targetId}/${destPath}`, ip, 'Success');
+          return NextResponse.json({ success: true });
+        } catch (err: any) {
+          return NextResponse.json({ error: err.message }, { status: 400 });
+        }
+      }
+
+      if (action === 'move') {
+        if (!srcPath || !destPath) {
+          return NextResponse.json({ error: 'srcPath and destPath are required for move' }, { status: 400 });
+        }
+        try {
+          renameWorkspaceItem(targetId, srcPath, destPath);
+          logAudit(user.email, 'File Moved', `Moved ${srcPath} to ${destPath}`, `${targetId}/${destPath}`, ip, 'Success');
+          return NextResponse.json({ success: true });
+        } catch (err: any) {
+          return NextResponse.json({ error: err.message }, { status: 400 });
+        }
+      }
 
       if (!targetId || !path) {
         return NextResponse.json({ error: 'projectId and path are required' }, { status: 400 });
@@ -72,7 +100,6 @@ export async function POST(req: NextRequest) {
 
       try {
         createWorkspaceItem(targetId, path, !!isDirectory);
-        const ip = getClientIp(req);
         logAudit(
           user.email,
           isDirectory ? 'Folder Created' : 'File Created',
