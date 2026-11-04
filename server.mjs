@@ -216,11 +216,22 @@ app.prepare()
       const projectPath = getProjectDir(targetProject);
       const effectivePath = fs.existsSync(projectPath) ? projectPath : __dirname;
 
+      const isWin = process.platform === 'win32';
+      const hasBwrap = !isWin && (fs.existsSync('/usr/bin/bwrap') || fs.existsSync('/bin/bwrap'));
+      const bwrapBin = fs.existsSync('/usr/bin/bwrap') ? '/usr/bin/bwrap' : '/bin/bwrap';
+      const pyPath = !isWin && (fs.existsSync('/usr/bin/python3') ? '/usr/bin/python3' : (fs.existsSync('/bin/python3') ? '/bin/python3' : null));
+
       ws.send(`\r\n\x1b[1;36m DevPanel Project Terminal\x1b[0m\r\n`);
       ws.send(`\x1b[90mConnected Project: ${targetProject}\x1b[0m\r\n`);
-      ws.send(`\x1b[90mTarget Directory: ${effectivePath}\x1b[0m\r\n\r\n`);
+      ws.send(`\x1b[90mTarget Directory: ${effectivePath}\x1b[0m\r\n`);
+      if (hasBwrap) {
+        ws.send(`\x1b[1;32mSecurity: Virtual Container Jail Active (Filesystem & Root Isolated)\x1b[0m\r\n\r\n`);
+      } else if (!isWin) {
+        ws.send(`\x1b[33mSecurity Note: Run 'apt install -y bubblewrap' on VPS for virtual jail isolation\x1b[0m\r\n\r\n`);
+      } else {
+        ws.send(`\r\n`);
+      }
 
-      const isWin = process.platform === 'win32';
       let shell;
       let shellArgs;
       let isPty = false;
@@ -229,22 +240,81 @@ app.prepare()
         shell = 'powershell.exe';
         shellArgs = ['-NoLogo'];
         isPty = false;
+      } else if (hasBwrap && pyPath) {
+        // Priority 1: Real PTY inside Bubblewrap Virtual Sandbox Jail (CodeSandbox-style zero-RAM jail)
+        const bwrapCmdList = [
+          bwrapBin,
+          '--ro-bind', '/usr', '/usr',
+          '--ro-bind', '/lib', '/lib',
+          '--ro-bind-try', '/lib64', '/lib64',
+          '--ro-bind', '/bin', '/bin',
+          '--ro-bind-try', '/sbin', '/sbin',
+          '--ro-bind-try', '/etc/resolv.conf', '/etc/resolv.conf',
+          '--ro-bind-try', '/etc/hosts', '/etc/hosts',
+          '--ro-bind-try', '/etc/ssl', '/etc/ssl',
+          '--ro-bind-try', '/etc/ca-certificates', '/etc/ca-certificates',
+          '--proc', '/proc',
+          '--dev', '/dev',
+          '--tmpfs', '/tmp',
+          '--bind', effectivePath, effectivePath,
+          '--chdir', effectivePath,
+          '--setenv', 'PATH', process.env.PATH || '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
+          '--setenv', 'HOME', effectivePath,
+          '--setenv', 'USER', 'developer',
+          '--setenv', 'TERM', 'xterm-256color',
+          '--setenv', 'PS1', '\\[\\033[01;32m\\]developer@' + targetProject + '\\[\\033[00m\\]:\\[\\033[01;34m\\]\\w\\[\\033[00m\\]\\$ ',
+          '--die-with-parent',
+          '--unshare-all',
+          '--share-net',
+          '/bin/bash',
+        ];
+
+        shell = pyPath;
+        shellArgs = [
+          '-u',
+          '-c',
+          `import pty, os; os.environ['TERM']='xterm-256color'; pty.spawn(${JSON.stringify(bwrapCmdList)})`
+        ];
+        isPty = true;
+      } else if (hasBwrap) {
+        // Priority 2: Bubblewrap without Python PTY
+        shell = bwrapBin;
+        shellArgs = [
+          '--ro-bind', '/usr', '/usr',
+          '--ro-bind', '/lib', '/lib',
+          '--ro-bind-try', '/lib64', '/lib64',
+          '--ro-bind', '/bin', '/bin',
+          '--ro-bind-try', '/sbin', '/sbin',
+          '--ro-bind-try', '/etc/resolv.conf', '/etc/resolv.conf',
+          '--ro-bind-try', '/etc/hosts', '/etc/hosts',
+          '--ro-bind-try', '/etc/ssl', '/etc/ssl',
+          '--ro-bind-try', '/etc/ca-certificates', '/etc/ca-certificates',
+          '--proc', '/proc',
+          '--dev', '/dev',
+          '--tmpfs', '/tmp',
+          '--bind', effectivePath, effectivePath,
+          '--chdir', effectivePath,
+          '--setenv', 'PATH', process.env.PATH || '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
+          '--setenv', 'HOME', effectivePath,
+          '--setenv', 'USER', 'developer',
+          '--setenv', 'TERM', 'xterm-256color',
+          '--setenv', 'PS1', '\\[\\033[01;32m\\]developer@' + targetProject + '\\[\\033[00m\\]:\\[\\033[01;34m\\]\\w\\[\\033[00m\\]\\$ ',
+          '--die-with-parent',
+          '--unshare-all',
+          '--share-net',
+          '/bin/bash',
+        ];
+        isPty = false;
+      } else if (pyPath) {
+        // Priority 3: Python PTY without bwrap
+        shell = pyPath;
+        shellArgs = ['-u', '-c', "import pty, os; os.environ['TERM']='xterm-256color'; pty.spawn(['/bin/bash'])"];
+        isPty = true;
       } else {
-        // Priority 1: Use Python3 unbuffered PTY (Standard on Ubuntu VPS - provides real TTY with echo & PS1)
-        const pyPath = fs.existsSync('/usr/bin/python3') ? '/usr/bin/python3' : (fs.existsSync('/bin/python3') ? '/bin/python3' : null);
-        if (pyPath) {
-          shell = pyPath;
-          shellArgs = ['-u', '-c', "import pty, os; os.environ['TERM']='xterm-256color'; pty.spawn(['/bin/bash'])"];
-          isPty = true;
-        } else if (fs.existsSync('/usr/bin/script') || fs.existsSync('/bin/script')) {
-          shell = fs.existsSync('/usr/bin/script') ? '/usr/bin/script' : '/bin/script';
-          shellArgs = ['-qfc', '/bin/bash', '/dev/null'];
-          isPty = true;
-        } else {
-          shell = fs.existsSync('/bin/bash') ? '/bin/bash' : 'sh';
-          shellArgs = ['-i'];
-          isPty = false;
-        }
+        // Priority 4: Direct shell
+        shell = fs.existsSync('/bin/bash') ? '/bin/bash' : 'sh';
+        shellArgs = ['-i'];
+        isPty = false;
       }
 
       let proc;
