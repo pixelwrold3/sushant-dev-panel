@@ -16,6 +16,12 @@ import {
   LogOut,
   FolderGit2,
   Plus,
+  Info,
+  X,
+  Sparkles,
+  ShieldCheck,
+  Copy,
+  Check,
 } from 'lucide-react';
 
 export default function Navbar() {
@@ -30,6 +36,8 @@ export default function Navbar() {
     status: 'Online',
   });
   const [userDropdownOpen, setUserDropdownOpen] = useState(false);
+  const [infoModalOpen, setInfoModalOpen] = useState(false);
+  const [copiedVersion, setCopiedVersion] = useState(false);
 
   // If on login page, don't show full navigation
   const isLoginPage = pathname === '/login';
@@ -148,6 +156,16 @@ export default function Navbar() {
                 </a>
               );
             })}
+
+            {/* Info / About Popup Button next to Settings */}
+            <button
+              onClick={() => setInfoModalOpen(true)}
+              className="flex items-center space-x-1 px-2.5 py-1.5 rounded-md text-xs font-medium text-blue-400 hover:text-blue-300 hover:bg-[#131e36] transition-colors border border-blue-500/20 bg-blue-500/10 ml-1"
+              title="DevPanel System Information & Credits (v1.21.131)"
+            >
+              <Info className="w-3.5 h-3.5" />
+              <span className="font-mono text-[11px] font-semibold">v1.21.131</span>
+            </button>
           </nav>
         </div>
 
@@ -219,6 +237,121 @@ export default function Navbar() {
           </div>
         </div>
       </div>
+
+      {/* Info & Credits Modal (Version 1.21.131) */}
+      {infoModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4 animate-in fade-in duration-150">
+          <div className="bg-[#0d1322] border border-[#1e293b] rounded-xl shadow-2xl max-w-md w-full overflow-hidden">
+            {/* Header */}
+            <div className="p-4 border-b border-[#1e293b] flex items-center justify-between bg-[#090d16]">
+              <div className="flex items-center space-x-2.5">
+                <div className="w-8 h-8 rounded-lg bg-gradient-to-tr from-blue-600 to-indigo-500 flex items-center justify-center text-white font-bold text-sm shadow-md shadow-blue-500/20">
+                  DP
+                </div>
+                <div>
+                  <h3 className="text-sm font-semibold text-white flex items-center gap-1.5">
+                    DevPanel Professional
+                    <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">
+                      v1.21.131
+                    </span>
+                  </h3>
+                  <p className="text-[11px] text-gray-400 font-mono">Self-Hosted Server & Web Engine</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setInfoModalOpen(false)}
+                className="text-gray-400 hover:text-white p-1 rounded hover:bg-[#1e293b] transition-colors"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Body */}
+            <div className="p-5 space-y-4 text-xs">
+              {/* Studio & Developer Cards */}
+              <div className="bg-[#090d16] border border-[#1e293b] rounded-lg p-3.5 space-y-3">
+                <div className="flex items-center justify-between pb-2 border-b border-[#1e293b]">
+                  <span className="text-gray-400">Developed By</span>
+                  <span className="font-semibold text-white flex items-center gap-1">
+                    <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+                    Angara Studio
+                  </span>
+                </div>
+
+                <div className="flex items-center justify-between pb-2 border-b border-[#1e293b]">
+                  <span className="text-gray-400">Lead Developer</span>
+                  <span className="font-semibold text-blue-400 font-mono">Sushant Rai</span>
+                </div>
+
+                <div className="flex items-center justify-between pb-2 border-b border-[#1e293b]">
+                  <span className="text-gray-400">Organization / Team</span>
+                  <span className="font-semibold text-purple-400">
+                    Pixels <span className="text-gray-400 text-[11px] font-normal">(Owner: Sushant)</span>
+                  </span>
+                </div>
+
+                <div className="flex items-center justify-between">
+                  <span className="text-gray-400">Engine Release</span>
+                  <span className="font-mono text-emerald-400 font-medium">Build 1.21.131-prod</span>
+                </div>
+              </div>
+
+              {/* Server & Security Environment Details */}
+              <div className="grid grid-cols-2 gap-2 text-[11px] font-mono">
+                <div className="bg-[#090d16] border border-[#1e293b] rounded p-2.5">
+                  <div className="text-gray-500 text-[10px]">INFRASTRUCTURE</div>
+                  <div className="text-gray-200 mt-0.5">Oracle Cloud (OCI)</div>
+                </div>
+                <div className="bg-[#090d16] border border-[#1e293b] rounded p-2.5">
+                  <div className="text-gray-500 text-[10px]">SECURITY JAIL</div>
+                  <div className="text-emerald-400 mt-0.5 flex items-center gap-1">
+                    <ShieldCheck className="w-3 h-3" /> Bubblewrap Active
+                  </div>
+                </div>
+                <div className="bg-[#090d16] border border-[#1e293b] rounded p-2.5">
+                  <div className="text-gray-500 text-[10px]">TIMEZONE</div>
+                  <div className="text-blue-300 mt-0.5">Asia/Kolkata (IST)</div>
+                </div>
+                <div className="bg-[#090d16] border border-[#1e293b] rounded p-2.5">
+                  <div className="text-gray-500 text-[10px]">NODE RUNTIME</div>
+                  <div className="text-gray-200 mt-0.5">v22.x LTS Production</div>
+                </div>
+              </div>
+            </div>
+
+            {/* Footer */}
+            <div className="p-3 bg-[#090d16] border-t border-[#1e293b] flex items-center justify-between text-xs">
+              <button
+                onClick={() => {
+                  navigator.clipboard.writeText('DevPanel v1.21.131 (Developed by Angara Studio, Sushant Rai under Pixels)');
+                  setCopiedVersion(true);
+                  setTimeout(() => setCopiedVersion(false), 2000);
+                }}
+                className="flex items-center gap-1.5 px-2.5 py-1.5 rounded bg-[#131e36] hover:bg-[#1e293b] text-gray-300 hover:text-white transition-colors border border-[#1e293b] text-[11px]"
+              >
+                {copiedVersion ? (
+                  <>
+                    <Check className="w-3 h-3 text-emerald-400" />
+                    <span className="text-emerald-400">Copied!</span>
+                  </>
+                ) : (
+                  <>
+                    <Copy className="w-3 h-3 text-gray-400" />
+                    <span>Copy Info</span>
+                  </>
+                )}
+              </button>
+
+              <button
+                onClick={() => setInfoModalOpen(false)}
+                className="px-4 py-1.5 rounded bg-blue-600 hover:bg-blue-500 text-white font-medium transition-colors"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </header>
   );
 }

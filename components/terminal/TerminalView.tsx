@@ -190,15 +190,16 @@ const TerminalTabInstance = forwardRef<TabHandle, TabInstanceProps>(function Ter
         try { term.focus(); } catch {}
       };
 
-      // Intercept terminal shortcuts:
-      // - Ctrl+Shift+C / (Ctrl+C when text is highlighted): Copies terminal text (suppresses Chrome Inspect Element & SIGINT)
-      // - Ctrl+Shift+V / Ctrl+V: Pastes text from clipboard into terminal
+      // Intercept terminal shortcuts (Windows & VS Code style):
+      // - Ctrl+C (when text is highlighted) OR Ctrl+Shift+C: Copies text to clipboard
+      // - Ctrl+C (when NO text is highlighted): Sends SIGINT interrupt to shell
+      // - Ctrl+V OR Ctrl+Shift+V: Pastes clipboard text directly into terminal
       term.attachCustomKeyEventHandler((event: KeyboardEvent) => {
         if (event.type !== 'keydown') return true;
 
         const isCtrlOrCmd = event.ctrlKey || event.metaKey;
 
-        // 1. Copy: Ctrl+Shift+C OR (Ctrl+C when text is highlighted)
+        // 1. Copy: Ctrl+C (with text selected) OR Ctrl+Shift+C
         if (
           (isCtrlOrCmd && event.shiftKey && (event.key === 'c' || event.key === 'C')) ||
           (isCtrlOrCmd && !event.shiftKey && (event.key === 'c' || event.key === 'C') && term.hasSelection())
@@ -206,13 +207,14 @@ const TerminalTabInstance = forwardRef<TabHandle, TabInstanceProps>(function Ter
           const selection = term.getSelection();
           if (selection) {
             navigator.clipboard.writeText(selection).catch(() => {});
+            term.clearSelection();
           }
           event.preventDefault();
           event.stopPropagation();
           return false;
         }
 
-        // 2. Paste: Ctrl+Shift+V OR Ctrl+V
+        // 2. Paste: Ctrl+V OR Ctrl+Shift+V (Windows natural paste)
         if (
           (isCtrlOrCmd && event.shiftKey && (event.key === 'v' || event.key === 'V')) ||
           (isCtrlOrCmd && !event.shiftKey && (event.key === 'v' || event.key === 'V'))
@@ -225,6 +227,7 @@ const TerminalTabInstance = forwardRef<TabHandle, TabInstanceProps>(function Ter
               }
             })
             .catch(() => {});
+          // Do not fully cancel if browser needs native paste fallback
           event.preventDefault();
           event.stopPropagation();
           return false;
@@ -232,6 +235,40 @@ const TerminalTabInstance = forwardRef<TabHandle, TabInstanceProps>(function Ter
 
         return true;
       });
+
+      // Native DOM Paste Event Listener (Guarantees Ctrl+V works even if navigator.clipboard.readText is gated by browser)
+      const handleNativePaste = (e: ClipboardEvent) => {
+        const text = e.clipboardData?.getData('text');
+        if (text && wsRef.current?.readyState === WebSocket.OPEN) {
+          wsRef.current.send(text);
+          e.preventDefault();
+        }
+      };
+      containerRef.current.addEventListener('paste', handleNativePaste);
+
+      // Windows Terminal / CMD Right-Click Behavior:
+      // - If text is highlighted: Right-click copies text and clears selection
+      // - If no text highlighted: Right-click pastes from clipboard
+      const handleContextMenu = (e: MouseEvent) => {
+        e.preventDefault();
+        if (term.hasSelection()) {
+          const selection = term.getSelection();
+          if (selection) {
+            navigator.clipboard.writeText(selection).catch(() => {});
+            term.clearSelection();
+          }
+        } else {
+          navigator.clipboard
+            .readText()
+            .then((text) => {
+              if (text && wsRef.current?.readyState === WebSocket.OPEN) {
+                wsRef.current.send(text);
+              }
+            })
+            .catch(() => {});
+        }
+      };
+      containerRef.current.addEventListener('contextmenu', handleContextMenu);
 
       term.onData((data: string) => {
         if (wsRef.current?.readyState === WebSocket.OPEN) {
@@ -253,6 +290,10 @@ const TerminalTabInstance = forwardRef<TabHandle, TabInstanceProps>(function Ter
 
       return () => {
         resizeObserver.disconnect();
+        try {
+          containerRef.current?.removeEventListener('paste', handleNativePaste);
+          containerRef.current?.removeEventListener('contextmenu', handleContextMenu);
+        } catch {}
       };
     }
 

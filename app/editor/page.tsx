@@ -45,6 +45,11 @@ import {
   Download,
   Archive,
   FileEdit,
+  Play,
+  Square,
+  PlayCircle,
+  Activity,
+  Power,
 } from 'lucide-react';
 import TerminalView from '@/components/terminal/TerminalView';
 
@@ -269,6 +274,74 @@ function EditorContent() {
     currentName: string;
   } | null>(null);
   const [renameNewName, setRenameNewName] = useState('');
+
+  // Production Service Control states
+  const [productionDropdownOpen, setProductionDropdownOpen] = useState(false);
+  const [productionModalOpen, setProductionModalOpen] = useState(false);
+  const [serviceActionLoading, setServiceActionLoading] = useState(false);
+  const [serviceLogs, setServiceLogs] = useState<string[]>([]);
+  const [serviceStatusBadge, setServiceStatusBadge] = useState<'Running' | 'Stopped' | 'Loading' | 'Unknown'>('Running');
+  const serviceConsoleBottomRef = useRef<HTMLDivElement | null>(null);
+
+  const currentServiceName =
+    projectId === 'diet-ghazipur' || projectId === 'diet-website'
+      ? 'diet-website'
+      : projectId === 'dev'
+      ? 'dev'
+      : 'diet-website';
+
+  useEffect(() => {
+    if (serviceConsoleBottomRef.current) {
+      serviceConsoleBottomRef.current.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [serviceLogs]);
+
+  const handleExecuteServiceAction = async (action: 'start' | 'stop' | 'restart' | 'status') => {
+    setProductionDropdownOpen(false);
+    setProductionModalOpen(true);
+    setServiceActionLoading(true);
+
+    const nowIST = formatIST(new Date());
+    const headerMsg = `[Production Service Manager]\nService: ${currentServiceName}.service | Action: systemctl ${action}\nTimestamp: ${nowIST}\n>>> Executing systemctl ${action} ${currentServiceName}...\n`;
+
+    setServiceLogs((prev) => [...prev, headerMsg]);
+
+    try {
+      const res = await fetch('/api/services', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          service: currentServiceName,
+          action,
+        }),
+      });
+
+      const data = await res.json();
+      if (res.ok) {
+        if (action === 'start' || action === 'restart') {
+          setServiceStatusBadge('Running');
+        } else if (action === 'stop') {
+          setServiceStatusBadge('Stopped');
+        } else if (data.serviceStatus) {
+          setServiceStatusBadge(data.serviceStatus.toLowerCase().includes('active') ? 'Running' : 'Stopped');
+        }
+
+        const out = data.output ? `${data.output}\n\n` : '';
+        const successBanner = `✔ SUCCESS: ${data.message || 'Your website has been started successfully!'}\n════════════════════════════════════════════════════════════\n`;
+        setServiceLogs((prev) => [...prev, out + successBanner]);
+      } else {
+        const errBanner = `✖ FAILED: ${data.error || 'Failed to execute systemctl action'}\n════════════════════════════════════════════════════════════\n`;
+        setServiceLogs((prev) => [...prev, errBanner]);
+      }
+    } catch (err: any) {
+      setServiceLogs((prev) => [
+        ...prev,
+        `✖ NETWORK ERROR: ${err.message}\n════════════════════════════════════════════════════════════\n`,
+      ]);
+    } finally {
+      setServiceActionLoading(false);
+    }
+  };
 
   // VS Code Sidebar Resizing state (slide left/right to resize)
   const [sidebarWidth, setSidebarWidth] = useState(260);
@@ -1186,6 +1259,62 @@ function EditorContent() {
               <span className="w-2 h-2 rounded-full bg-amber-400" title={`${undonePulls} undone pull available`} />
             )}
           </button>
+
+          {/* Production Service Control Button (systemctl restart, start, stop, status) */}
+          <div className="relative">
+            <button
+              onClick={() => setProductionDropdownOpen(!productionDropdownOpen)}
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded bg-emerald-950/40 hover:bg-emerald-900/50 border border-emerald-500/40 text-xs text-emerald-300 font-medium transition-colors shrink-0 shadow-sm"
+              title="Production Service Management (systemctl)"
+            >
+              <PlayCircle className="w-3.5 h-3.5 text-emerald-400" />
+              <span>Production</span>
+              <ChevronDown className="w-3 h-3 text-emerald-400/80" />
+            </button>
+
+            {productionDropdownOpen && (
+              <div className="absolute left-0 mt-1.5 w-56 bg-[#0d1322] border border-[#1e293b] rounded-lg shadow-2xl py-1.5 z-50 text-xs animate-in fade-in duration-100">
+                <div className="px-3 py-1.5 border-b border-[#1e293b] flex items-center justify-between text-[11px] text-gray-400 font-mono">
+                  <span>Service:</span>
+                  <span className="text-emerald-400 font-semibold">{currentServiceName}</span>
+                </div>
+
+                <button
+                  onClick={() => handleExecuteServiceAction('start')}
+                  className="w-full flex items-center gap-2 px-3 py-2 text-emerald-400 hover:bg-[#131e36] text-left transition-colors"
+                >
+                  <Play className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>Start Website</span>
+                </button>
+
+                <button
+                  onClick={() => handleExecuteServiceAction('restart')}
+                  className="w-full flex items-center gap-2 px-3 py-2 text-cyan-400 hover:bg-[#131e36] text-left transition-colors"
+                >
+                  <RefreshCw className="w-3.5 h-3.5 text-cyan-400" />
+                  <span>Restart Website</span>
+                </button>
+
+                <button
+                  onClick={() => handleExecuteServiceAction('stop')}
+                  className="w-full flex items-center gap-2 px-3 py-2 text-rose-400 hover:bg-[#131e36] text-left transition-colors"
+                >
+                  <Square className="w-3.5 h-3.5 text-rose-400" />
+                  <span>Stop Website</span>
+                </button>
+
+                <div className="border-t border-[#1e293b] my-1" />
+
+                <button
+                  onClick={() => handleExecuteServiceAction('status')}
+                  className="w-full flex items-center gap-2 px-3 py-2 text-blue-400 hover:bg-[#131e36] text-left transition-colors"
+                >
+                  <Activity className="w-3.5 h-3.5 text-blue-400" />
+                  <span>Check Status &amp; Logs</span>
+                </button>
+              </div>
+            )}
+          </div>
         </div>
 
         {/* Right Action Controls: Save & Terminal */}
@@ -2258,6 +2387,164 @@ function EditorContent() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Production Service Management & Terminal Modal */}
+      {productionModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in duration-150">
+          <div className="w-full max-w-3xl bg-[#0d1322] border border-[#1e293b] rounded-xl shadow-2xl overflow-hidden flex flex-col max-h-[85vh]">
+            {/* Modal Header */}
+            <div className="p-3.5 border-b border-[#1e293b] bg-[#090d16] flex items-center justify-between">
+              <div className="flex items-center space-x-2.5">
+                <div className="w-8 h-8 rounded-lg bg-emerald-950/60 border border-emerald-500/40 flex items-center justify-center text-emerald-400">
+                  <PlayCircle className="w-4 h-4" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-sm font-semibold text-white">Production Service Manager</h3>
+                    <span className="font-mono text-[11px] px-2 py-0.5 rounded bg-blue-500/10 text-blue-400 border border-blue-500/20">
+                      {currentServiceName}.service
+                    </span>
+                    <span
+                      className={`text-[11px] px-2 py-0.5 rounded flex items-center gap-1 font-mono font-medium ${
+                        serviceStatusBadge === 'Running'
+                          ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/30'
+                          : serviceStatusBadge === 'Stopped'
+                          ? 'bg-rose-500/10 text-rose-400 border border-rose-500/30'
+                          : 'bg-amber-500/10 text-amber-400 border border-amber-500/30'
+                      }`}
+                    >
+                      <span
+                        className={`w-1.5 h-1.5 rounded-full ${
+                          serviceStatusBadge === 'Running'
+                            ? 'bg-emerald-400 animate-pulse'
+                            : serviceStatusBadge === 'Stopped'
+                            ? 'bg-rose-400'
+                            : 'bg-amber-400'
+                        }`}
+                      />
+                      {serviceStatusBadge}
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-gray-400 mt-0.5 font-mono">
+                    Target: <span className="text-gray-300">/etc/systemd/system/{currentServiceName}.service</span>
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setProductionModalOpen(false)}
+                className="text-gray-400 hover:text-white p-1 rounded hover:bg-[#1e293b]"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Quick Action Toolbar */}
+            <div className="px-4 py-2 bg-[#090d16]/90 border-b border-[#1e293b] flex items-center justify-between gap-2 overflow-x-auto text-xs">
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  onClick={() => handleExecuteServiceAction('start')}
+                  disabled={serviceActionLoading}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-300 border border-emerald-500/40 font-medium transition-colors disabled:opacity-50"
+                  title="systemctl start"
+                >
+                  <Play className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>Start</span>
+                </button>
+
+                <button
+                  onClick={() => handleExecuteServiceAction('restart')}
+                  disabled={serviceActionLoading}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded bg-cyan-600/20 hover:bg-cyan-600/30 text-cyan-300 border border-cyan-500/40 font-medium transition-colors disabled:opacity-50"
+                  title="systemctl restart"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 text-cyan-400 ${serviceActionLoading ? 'animate-spin' : ''}`} />
+                  <span>Restart</span>
+                </button>
+
+                <button
+                  onClick={() => handleExecuteServiceAction('stop')}
+                  disabled={serviceActionLoading}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded bg-rose-600/20 hover:bg-rose-600/30 text-rose-300 border border-rose-500/40 font-medium transition-colors disabled:opacity-50"
+                  title="systemctl stop"
+                >
+                  <Square className="w-3.5 h-3.5 text-rose-400" />
+                  <span>Stop</span>
+                </button>
+
+                <button
+                  onClick={() => handleExecuteServiceAction('status')}
+                  disabled={serviceActionLoading}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded bg-[#131e36] hover:bg-[#1e293b] text-gray-300 hover:text-white border border-[#1e293b] font-medium transition-colors disabled:opacity-50"
+                  title="systemctl status"
+                >
+                  <Activity className="w-3.5 h-3.5 text-blue-400" />
+                  <span>Status</span>
+                </button>
+              </div>
+
+              <div className="flex items-center gap-2 shrink-0 text-[11px] text-gray-400">
+                <span className="flex items-center gap-1 text-emerald-400">
+                  <ShieldCheck className="w-3.5 h-3.5" />
+                  <span>Security Sandbox (Read-Only)</span>
+                </span>
+                <button
+                  onClick={() => setServiceLogs([])}
+                  className="px-2 py-1 rounded bg-[#1e293b] hover:bg-[#283548] text-gray-300 text-[11px]"
+                >
+                  Clear Console
+                </button>
+              </div>
+            </div>
+
+            {/* Read-Only Terminal Console Screen */}
+            <div className="flex-1 p-4 bg-[#050811] overflow-y-auto font-mono text-[12px] leading-relaxed select-text min-h-[300px] max-h-[460px]">
+              {serviceLogs.length === 0 ? (
+                <div className="h-full flex flex-col items-center justify-center text-gray-500 py-12">
+                  <PlayCircle className="w-10 h-10 text-gray-600 mb-2" />
+                  <p className="text-gray-400">No service actions executed yet.</p>
+                  <p className="text-[11px] text-gray-600 mt-1">
+                    Click <strong className="text-emerald-400">Start</strong>, <strong className="text-cyan-400">Restart</strong>, or <strong className="text-blue-400">Status</strong> to view systemd terminal output.
+                  </p>
+                </div>
+              ) : (
+                <div className="whitespace-pre-wrap break-all text-gray-200">
+                  {serviceLogs.map((log, idx) => (
+                    <div key={idx} className="mb-2">
+                      {log}
+                    </div>
+                  ))}
+                  <div ref={serviceConsoleBottomRef} />
+                </div>
+              )}
+            </div>
+
+            {/* Modal Footer */}
+            <div className="p-3 bg-[#090d16] border-t border-[#1e293b] flex items-center justify-between text-xs">
+              <span className="text-gray-500 text-[11px] font-mono">
+                Systemctl Isolation • Command input locked
+              </span>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => {
+                    navigator.clipboard.writeText(serviceLogs.join('\n'));
+                    setActionMessage('Service logs copied!');
+                    setTimeout(() => setActionMessage(null), 2000);
+                  }}
+                  className="px-3 py-1.5 rounded bg-[#1e293b] hover:bg-[#283548] text-gray-300 hover:text-white transition-colors"
+                >
+                  Copy Output
+                </button>
+                <button
+                  onClick={() => setProductionModalOpen(false)}
+                  className="px-4 py-1.5 rounded bg-blue-600 hover:bg-blue-500 text-white font-medium transition-colors"
+                >
+                  Close
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}
