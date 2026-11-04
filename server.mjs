@@ -10,6 +10,14 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
+// Ensure unbuffered log writes so nohup log files flush immediately
+if (process.stdout._handle && typeof process.stdout._handle.setBlocking === 'function') {
+  try { process.stdout._handle.setBlocking(true); } catch {}
+}
+if (process.stderr._handle && typeof process.stderr._handle.setBlocking === 'function') {
+  try { process.stderr._handle.setBlocking(true); } catch {}
+}
+
 const isDev = process.argv.includes('--dev') || process.env.NODE_ENV === 'development';
 process.env.NODE_ENV = isDev ? 'development' : 'production';
 const dev = isDev;
@@ -70,6 +78,8 @@ process.on('uncaughtException', (err) => {
 process.on('unhandledRejection', (reason) => {
   console.error('\x1b[31m[DevPanel Unhandled Rejection]:\x1b[0m', reason);
 });
+
+console.log(`> Initializing DevPanel production engine on ${hostname}:${port}...`);
 
 app.prepare()
   .then(() => {
