@@ -307,10 +307,8 @@ function EditorContent() {
     setProductionModalOpen(true);
     setServiceActionLoading(true);
 
-    const nowIST = formatIST(new Date());
-    const headerMsg = `[Production Service Manager]\nService: ${currentServiceName}.service | Action: systemctl ${action}\nTimestamp: ${nowIST}\n>>> Executing systemctl ${action} ${currentServiceName}...\n`;
-
-    setServiceLogs((prev) => [...prev, headerMsg]);
+    const initialMsg = `$ systemctl ${action} ${currentServiceName}\nExecuting systemctl ${action} ${currentServiceName}...\n`;
+    setServiceLogs([initialMsg]);
 
     try {
       const res = await fetch('/api/services', {
@@ -324,25 +322,28 @@ function EditorContent() {
 
       const data = await res.json();
       if (res.ok) {
-        if (action === 'start' || action === 'restart') {
-          setServiceStatusBadge('Running');
-        } else if (action === 'stop') {
-          setServiceStatusBadge('Stopped');
-        } else if (data.serviceStatus) {
-          setServiceStatusBadge(data.serviceStatus.toLowerCase().includes('active') ? 'Running' : 'Stopped');
-        }
+        const isRunning =
+          data.serviceStatus === 'active' ||
+          (data.serviceStatus &&
+            data.serviceStatus.toLowerCase().includes('active') &&
+            !data.serviceStatus.toLowerCase().includes('inactive'));
 
-        const out = data.output ? `${data.output}\n\n` : '';
-        const successBanner = `✔ SUCCESS: ${data.message || 'Your website has been started successfully!'}\n════════════════════════════════════════════════════════════\n`;
-        setServiceLogs((prev) => [...prev, out + successBanner]);
+        setServiceStatusBadge(isRunning ? 'Running' : 'Stopped');
+
+        const resultOutput = data.output || `[systemctl ${action} ${currentServiceName} executed]\n`;
+        const banner = isRunning
+          ? `\n✔ Website is currently RUNNING (${currentServiceName}.service)\n════════════════════════════════════════════════════════════\n`
+          : `\n✔ Website is currently STOPPED (${currentServiceName}.service)\n════════════════════════════════════════════════════════════\n`;
+
+        setServiceLogs([resultOutput + banner]);
       } else {
-        const errBanner = `✖ FAILED: ${data.error || 'Failed to execute systemctl action'}\n════════════════════════════════════════════════════════════\n`;
-        setServiceLogs((prev) => [...prev, errBanner]);
+        setServiceLogs([
+          `$ systemctl ${action} ${currentServiceName}\n\n✖ FAILED: ${data.error || 'Execution failed'}\n════════════════════════════════════════════════════════════\n`
+        ]);
       }
     } catch (err: any) {
-      setServiceLogs((prev) => [
-        ...prev,
-        `✖ NETWORK ERROR: ${err.message}\n════════════════════════════════════════════════════════════\n`,
+      setServiceLogs([
+        `$ systemctl ${action} ${currentServiceName}\n\n✖ NETWORK ERROR: ${err.message}\n════════════════════════════════════════════════════════════\n`
       ]);
     } finally {
       setServiceActionLoading(false);
