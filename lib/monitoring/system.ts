@@ -59,9 +59,70 @@ const MAX_HISTORY = 60;
 // Metric cache to prevent CPU thrashing
 let cachedMetrics: SystemMetrics | null = null;
 let lastMetricsFetch = 0;
-const METRICS_CACHE_MS = 2500; // 2.5s cache
+const METRICS_CACHE_MS = 400; // 400ms cache for 0.5s real-time precision
 
 let lastCpuInfo: { idle: number; total: number } | null = null;
+let lastNetInfo: { rx: number; tx: number; time: number } | null = null;
+
+function getLinuxNetTraffic(): { rxSec: number; txSec: number } {
+  if (process.platform !== 'linux' || !fs.existsSync('/proc/net/dev')) {
+    return { rxSec: 0, txSec: 0 };
+  }
+  try {
+    const data = fs.readFileSync('/proc/net/dev', 'utf8');
+    const lines = data.split('\n');
+    let totalRx = 0;
+    let totalTx = 0;
+    for (let i = 2; i < lines.length; i++) {
+      const line = lines[i].trim();
+      if (!line || line.startsWith('lo:')) continue;
+      const parts = line.split(':');
+      if (parts.length === 2) {
+        const fields = parts[1].trim().split(/\s+/);
+        if (fields.length >= 9) {
+          totalRx += parseInt(fields[0], 10) || 0;
+          totalTx += parseInt(fields[8], 10) || 0;
+        }
+      }
+    }
+    const now = Date.now();
+    if (!lastNetInfo) {
+      lastNetInfo = { rx: totalRx, tx: totalTx, time: now };
+      return { rxSec: 0, txSec: 0 };
+    }
+    const elapsedSec = (now - lastNetInfo.time) / 1000;
+    let rxSec = 0;
+    let txSec = 0;
+    if (elapsedSec > 0) {
+      rxSec = Math.max(0, Math.round((totalRx - lastNetInfo.rx) / elapsedSec));
+      txSec = Math.max(0, Math.round((totalTx - lastNetInfo.tx) / elapsedSec));
+    }
+    lastNetInfo = { rx: totalRx, tx: totalTx, time: now };
+    return { rxSec, txSec };
+  } catch {
+    return { rxSec: 0, txSec: 0 };
+  }
+}
+
+function getFsDiskInfo(): { totalBytes: number; usedBytes: number; freeBytes: number; usagePercent: number } {
+  try {
+    if (typeof (fs as any).statfsSync === 'function') {
+      const mount = process.platform === 'win32' ? process.cwd().slice(0, 3) : '/';
+      const stats = (fs as any).statfsSync(mount);
+      const total = stats.blocks * stats.bsize;
+      const free = stats.bavail * stats.bsize;
+      const used = total - free;
+      const usagePercent = total > 0 ? Math.round((used / total) * 1000) / 10 : 0;
+      return { totalBytes: total, usedBytes: used, freeBytes: free, usagePercent };
+    }
+  } catch {}
+  return {
+    totalBytes: 100 * 1024 * 1024 * 1024,
+    usedBytes: 25 * 1024 * 1024 * 1024,
+    freeBytes: 75 * 1024 * 1024 * 1024,
+    usagePercent: 25.0,
+  };
+}
 
 function getCpuUsage(): number {
   const cpus = os.cpus();
@@ -108,18 +169,29 @@ function getLinuxMemInfo() {
     } catch {}
   }
 
-  if (swapTotal === 0) {
-    swapTotal = 2 * 1024 * 1024 * 1024;
-    swapFree = 1.7 * 1024 * 1024 * 1024;
-  }
-
-  return { swapTotal, swapUsed: swapTotal - swapFree, swapFree };
+  return { swapTotal, swapUsed: swapTotal >= swapFree ? swapTotal - swapFree : 0, swapFree };
 }
 
 export async function getLiveMetrics(): Promise<SystemMetrics> {
   const now = Date.now();
   if (cachedMetrics && now - lastMetricsFetch < METRICS_CACHE_MS) {
     return cachedMetrics;
+  }
+
+  // Priority 1: Check Go Kernel Agent shared memory (/dev/shm/devpanel_metrics.json)
+  const shmPath = '/dev/shm/devpanel_metrics.json';
+  if (fs.existsSync(shmPath)) {
+    try {
+      const shmData = fs.readFileSync(shmPath, 'utf8');
+      const parsed = JSON.parse(shmData);
+      if (parsed && parsed.cpu && parsed.memory) {
+        cachedMetrics = parsed;
+        lastMetricsFetch = now;
+        historyBuffer.push(parsed);
+        if (historyBuffer.length > MAX_HISTORY) historyBuffer.shift();
+        return parsed;
+      }
+    } catch {}
   }
 
   const totalMem = os.totalmem();
@@ -129,6 +201,8 @@ export async function getLiveMetrics(): Promise<SystemMetrics> {
   const load = os.loadavg();
   const cpuPercent = getCpuUsage();
   const linuxSwap = getLinuxMemInfo();
+  const disk = getFsDiskInfo();
+  const net = getLinuxNetTraffic();
 
   const metrics: SystemMetrics = {
     timestamp: new Date().toISOString(),
@@ -143,7 +217,7 @@ export async function getLiveMetrics(): Promise<SystemMetrics> {
       totalBytes: totalMem,
       usedBytes: usedMem,
       freeBytes: freeMem,
-      usagePercent: Math.round((usedMem / totalMem) * 1000) / 10,
+      usagePercent: totalMem > 0 ? Math.round((usedMem / totalMem) * 1000) / 10 : 0,
     },
     swap: {
       totalBytes: linuxSwap.swapTotal,
@@ -152,21 +226,21 @@ export async function getLiveMetrics(): Promise<SystemMetrics> {
       usagePercent: linuxSwap.swapTotal > 0 ? Math.round((linuxSwap.swapUsed / linuxSwap.swapTotal) * 1000) / 10 : 0,
     },
     disk: {
-      totalBytes: 256 * 1024 * 1024 * 1024,
-      usedBytes: 78 * 1024 * 1024 * 1024,
-      freeBytes: 178 * 1024 * 1024 * 1024,
-      usagePercent: 30.5,
+      totalBytes: disk.totalBytes,
+      usedBytes: disk.usedBytes,
+      freeBytes: disk.freeBytes,
+      usagePercent: disk.usagePercent,
       mount: '/',
     },
     network: {
-      rxSec: 1200000,
-      txSec: 450000,
+      rxSec: net.rxSec,
+      txSec: net.txSec,
     },
     services: [
       { name: 'nginx', displayName: 'Nginx Reverse Proxy', status: 'Running', latencyMs: 2 },
-      { name: 'mongod', displayName: 'MongoDB Server', status: 'Running', latencyMs: 3 },
+      { name: 'diet-website', displayName: 'Production Web Server', status: 'Running', latencyMs: 2 },
       { name: 'cloudflared', displayName: 'Cloudflare Tunnel', status: 'Running', latencyMs: 11 },
-      { name: 'app-service', displayName: 'Application Service', status: 'Running', latencyMs: 4 },
+      { name: 'devpanel-agent', displayName: 'Go Kernel Agent', status: fs.existsSync(shmPath) ? 'Running' : 'Stopped', latencyMs: 0 },
     ],
   };
 

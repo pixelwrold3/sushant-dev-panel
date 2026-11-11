@@ -64,7 +64,26 @@ export default function DashboardPage() {
   useEffect(() => {
     fetchData();
     const interval = setInterval(fetchData, 8000);
-    return () => clearInterval(interval);
+
+    // High-frequency 0.5s real-time WebSocket connection
+    let ws: WebSocket | null = null;
+    try {
+      const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      ws = new WebSocket(`${proto}//${window.location.host}/api/ws/metrics`);
+      ws.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          if (data && data.type === 'metrics_update') {
+            setMetrics(data);
+          }
+        } catch {}
+      };
+    } catch {}
+
+    return () => {
+      clearInterval(interval);
+      if (ws) ws.close();
+    };
   }, []);
 
   const handleQuickRestart = async (service: string) => {
@@ -87,12 +106,12 @@ export default function DashboardPage() {
     setTimeout(() => setActionMessage(null), 4000);
   };
 
-  const cpuPercent = metrics?.cpu?.usagePercent ?? 24;
-  const memPercent = metrics?.memory?.usagePercent ?? 41;
-  const swapPercent = metrics?.swap?.usagePercent ?? 12;
-  const avgLoad = metrics?.cpu?.avgLoad?.[0] ?? 1.21;
-  const rxMb = metrics?.network?.rxSec ? (metrics.network.rxSec / (1024 * 1024)).toFixed(1) : '12.4';
-  const txMb = metrics?.network?.txSec ? (metrics.network.txSec / (1024 * 1024)).toFixed(1) : '4.2';
+  const cpuPercent = metrics?.cpu?.usagePercent ?? 0;
+  const memPercent = metrics?.memory?.usagePercent ?? 0;
+  const swapPercent = metrics?.swap?.usagePercent ?? 0;
+  const avgLoad = metrics?.cpu?.avgLoad?.[0] ?? 0;
+  const rxMb = metrics?.network?.rxSec ? (metrics.network.rxSec / (1024 * 1024)).toFixed(1) : '0.0';
+  const txMb = metrics?.network?.txSec ? (metrics.network.txSec / (1024 * 1024)).toFixed(1) : '0.0';
 
   return (
     <div className="p-6 max-w-7xl mx-auto space-x-0 space-y-6">
@@ -161,8 +180,8 @@ export default function DashboardPage() {
             </div>
           </div>
           <div className="text-[11px] text-gray-500 flex justify-between">
-            <span>{metrics?.cpu?.cores || 8} vCPUs</span>
-            <span>Avg: 28%</span>
+            <span>{metrics?.cpu?.cores || 1} vCPUs</span>
+            <span>Avg: {metrics?.cpu?.avgLoad?.[0] || '0.00'}</span>
           </div>
         </div>
 
@@ -182,8 +201,8 @@ export default function DashboardPage() {
             </div>
           </div>
           <div className="text-[11px] text-gray-500 flex justify-between">
-            <span>Used: {metrics?.memory ? (metrics.memory.usedBytes / (1024 ** 3)).toFixed(1) : '3.2'} GB</span>
-            <span>Total: {metrics?.memory ? (metrics.memory.totalBytes / (1024 ** 3)).toFixed(1) : '8.0'} GB</span>
+            <span>Used: {metrics?.memory ? (metrics.memory.usedBytes / (1024 ** 2) >= 1024 ? (metrics.memory.usedBytes / (1024 ** 3)).toFixed(2) + ' GB' : Math.round(metrics.memory.usedBytes / (1024 ** 2)) + ' MB') : '0 MB'}</span>
+            <span>Total: {metrics?.memory ? (metrics.memory.totalBytes / (1024 ** 2) >= 1024 ? (metrics.memory.totalBytes / (1024 ** 3)).toFixed(2) + ' GB' : Math.round(metrics.memory.totalBytes / (1024 ** 2)) + ' MB') : '0 MB'}</span>
           </div>
         </div>
 
@@ -203,8 +222,8 @@ export default function DashboardPage() {
             </div>
           </div>
           <div className="text-[11px] text-gray-500 flex justify-between">
-            <span>Used: 512 MB</span>
-            <span>Total: 4.0 GB</span>
+            <span>Used: {metrics?.swap ? (metrics.swap.usedBytes / (1024 ** 2) >= 1024 ? (metrics.swap.usedBytes / (1024 ** 3)).toFixed(1) + ' GB' : Math.round(metrics.swap.usedBytes / (1024 ** 2)) + ' MB') : '0 MB'}</span>
+            <span>Total: {metrics?.swap ? (metrics.swap.totalBytes / (1024 ** 3)).toFixed(1) + ' GB' : '0 GB'}</span>
           </div>
         </div>
 

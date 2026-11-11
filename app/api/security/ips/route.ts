@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { secureApiHandler, logAudit, getClientIp } from '@/lib/api/handler';
 import { getDatabase, saveDatabase, IPRecord } from '@/lib/database/db';
+import { blockIpAtKernel, unblockIpAtKernel } from '@/lib/security/kernelFirewall';
 
 export async function GET(req: NextRequest) {
   return secureApiHandler(
@@ -86,6 +87,13 @@ export async function POST(req: NextRequest) {
 
       saveDatabase();
 
+      // Synchronize with kernel-level iptables via Go Agent
+      if (type === 'allowlist') {
+        unblockIpAtKernel(ip).catch(() => {});
+      } else {
+        blockIpAtKernel(ip, reason).catch(() => {});
+      }
+
       logAudit(
         user.email,
         type === 'allowlist' ? 'IP Allowlisted' : 'IP Blocked',
@@ -120,6 +128,9 @@ export async function DELETE(req: NextRequest) {
 
       record.status = 'removed';
       saveDatabase();
+
+      // Unblock at kernel iptables level
+      unblockIpAtKernel(ip).catch(() => {});
 
       const clientIp = getClientIp(req);
       db.securityEvents.unshift({

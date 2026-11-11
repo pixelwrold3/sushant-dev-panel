@@ -57,7 +57,27 @@ export default function MonitoringPage() {
   useEffect(() => {
     fetchMonitoringData();
     const interval = setInterval(fetchMonitoringData, 8000);
-    return () => clearInterval(interval);
+
+    // High-frequency 0.5s real-time WebSocket connection
+    let ws: WebSocket | null = null;
+    try {
+      const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      ws = new WebSocket(`${proto}//${window.location.host}/api/ws/metrics`);
+      ws.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          if (data && data.type === 'metrics_update') {
+            setMetrics(data);
+            setLoading(false);
+          }
+        } catch {}
+      };
+    } catch {}
+
+    return () => {
+      clearInterval(interval);
+      if (ws) ws.close();
+    };
   }, []);
 
   const handleServiceAction = async (service: string, action: string) => {
@@ -89,10 +109,10 @@ export default function MonitoringPage() {
     setTimeout(() => setStatusMsg(null), 4000);
   };
 
-  const cpu = metrics?.cpu || { usagePercent: 28, avgLoad: [1.2, 0.94, 0.82], cores: 8 };
-  const mem = metrics?.memory || { totalBytes: 8 * 1024 ** 3, usedBytes: 3.2 * 1024 ** 3, usagePercent: 40 };
-  const swap = metrics?.swap || { totalBytes: 6 * 1024 ** 3, usedBytes: 512 * 1024 ** 2, usagePercent: 8 };
-  const disk = metrics?.disk || { totalBytes: 256 * 1024 ** 3, usedBytes: 96 * 1024 ** 3, usagePercent: 37.5, mount: '/' };
+  const cpu = metrics?.cpu || { usagePercent: 0, avgLoad: [0, 0, 0], cores: 1 };
+  const mem = metrics?.memory || { totalBytes: 0, usedBytes: 0, usagePercent: 0 };
+  const swap = metrics?.swap || { totalBytes: 0, usedBytes: 0, usagePercent: 0 };
+  const disk = metrics?.disk || { totalBytes: 0, usedBytes: 0, usagePercent: 0, mount: '/' };
 
   return (
     <div className="p-6 max-w-7xl mx-auto space-y-6">

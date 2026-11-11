@@ -1,4 +1,5 @@
 import { getDatabase, saveDatabase, IPRecord, SecurityEvent, RequestRecord } from '../database/db';
+import { blockIpAtKernel, unblockIpAtKernel } from './kernelFirewall';
 
 interface RateTracker {
   timestamps: number[];
@@ -38,6 +39,7 @@ export function cleanupExpiredBlocks() {
       if (exp <= now) {
         record.status = 'expired';
         modified = true;
+        unblockIpAtKernel(record.ip).catch(() => {});
         db.securityEvents.unshift({
           id: `evt_${Date.now()}_${Math.random().toString(36).substring(7)}`,
           timestamp: new Date().toISOString(),
@@ -156,6 +158,9 @@ export function checkRequest(ip: string, method: string, route: string): CheckRe
           });
 
           saveDatabase();
+
+          // Drop IP instantly at kernel level via Go agent so CPU stays at ~0%
+          blockIpAtKernel(ip, `Rate limit exceeded: ${rule.name}`).catch(() => {});
 
           return {
             allowed: false,
