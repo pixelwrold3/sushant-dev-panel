@@ -1,13 +1,41 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { secureApiHandler, logAudit, getClientIp } from '@/lib/api/handler';
 import { getDatabase, saveDatabase, IPRecord } from '@/lib/database/db';
-import { blockIpAtKernel, unblockIpAtKernel } from '@/lib/security/kernelFirewall';
+import { blockIpAtKernel, unblockIpAtKernel, getKernelBlockedIps } from '@/lib/security/kernelFirewall';
 
 export async function GET(req: NextRequest) {
   return secureApiHandler(
     req,
     async () => {
       const db = getDatabase();
+      try {
+        const kernelIps = await getKernelBlockedIps();
+        let modified = false;
+        for (const [kIp, reason] of Object.entries(kernelIps)) {
+          let existing = db.ipRecords.find((r) => r.ip === kIp);
+          if (!existing) {
+            db.ipRecords.unshift({
+              id: `ip_k_${Date.now()}_${Math.random().toString(36).substring(7)}`,
+              ip: kIp,
+              type: 'permanent',
+              reason: String(reason || 'Kernel Firewall (iptables DROP)'),
+              status: 'active',
+              createdAt: new Date().toISOString(),
+              expiresAt: null,
+              requestCount: 1,
+              blockedCount: 1,
+              lastRequest: new Date().toISOString(),
+              routesHit: ['kernel:iptables'],
+            });
+            modified = true;
+          } else if (existing.status !== 'active') {
+            existing.status = 'active';
+            modified = true;
+          }
+        }
+        if (modified) saveDatabase();
+      } catch {}
+
       return NextResponse.json({ ipRecords: db.ipRecords });
     },
     'manage_ips'

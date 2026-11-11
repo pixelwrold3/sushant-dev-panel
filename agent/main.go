@@ -382,60 +382,62 @@ func (s *AgentServer) syncToSharedMemory(m *SystemMetrics) {
 	}
 }
 
-// checkActiveConnectionFloods scans /proc/net/tcp to detect DDoS connection floods before CPU spikes
-func (s *AgentServer) checkActiveConnectionFloods() {
-	file, err := os.Open("/proc/net/tcp")
-	if err != nil {
-		return
+var cloudflareCIDRs = []string{
+	"173.245.48.0/20",
+	"103.21.244.0/22",
+	"103.22.200.0/22",
+	"103.31.4.0/22",
+	"141.101.64.0/18",
+	"108.162.192.0/18",
+	"190.93.240.0/20",
+	"188.114.96.0/20",
+	"197.234.240.0/22",
+	"198.41.128.0/17",
+	"162.158.0.0/15",
+	"104.16.0.0/13",
+	"104.24.0.0/14",
+	"172.64.0.0/13",
+	"131.0.72.0/22",
+	"10.0.0.0/8",
+	"172.16.0.0/12",
+	"192.168.0.0/16",
+	"169.254.0.0/16",
+	"127.0.0.0/8",
+}
+
+// isProtectedIP ensures the server never blocks itself, loopback, or Cloudflare Tunnel edge IPs
+func isProtectedIP(ip net.IP) bool {
+	if ip == nil || ip.IsLoopback() || ip.IsPrivate() || ip.IsUnspecified() {
+		return true
 	}
-	defer file.Close()
 
-	ipCounts := make(map[string]int)
-	scanner := bufio.NewScanner(file)
-	lineNum := 0
+	// Never block server's own known public IP
+	ipStr := ip.String()
+	if ipStr == "137.23.54.235" {
+		return true
+	}
 
-	for scanner.Scan() {
-		lineNum++
-		if lineNum == 1 {
-			continue // Header
-		}
-		fields := strings.Fields(scanner.Text())
-		if len(fields) >= 4 {
-			// remote_address is fields[2] in hex e.g. 0100007F:1F90
-			remote := fields[2]
-			parts := strings.Split(remote, ":")
-			if len(parts) == 2 {
-				ipHex := parts[0]
-				if len(ipHex) == 8 {
-					// Parse IP
-					b0, _ := strconv.ParseUint(ipHex[6:8], 16, 8)
-					b1, _ := strconv.ParseUint(ipHex[4:6], 16, 8)
-					b2, _ := strconv.ParseUint(ipHex[2:4], 16, 8)
-					b3, _ := strconv.ParseUint(ipHex[0:2], 16, 8)
-					ipStr := fmt.Sprintf("%d.%d.%d.%d", b0, b1, b2, b3)
-
-					// Ignore localhost
-					if ipStr != "127.0.0.1" && !strings.HasPrefix(ipStr, "0.0.0.") {
-						ipCounts[ipStr]++
-					}
+	// Check against all local interface addresses
+	addrs, err := net.InterfaceAddrs()
+	if err == nil {
+		for _, addr := range addrs {
+			if ipNet, ok := addr.(*net.IPNet); ok {
+				if ipNet.IP.Equal(ip) {
+					return true
 				}
 			}
 		}
 	}
 
-	// Check if any single IP exceeded max threshold
-	for ip, count := range ipCounts {
-		if count >= s.autoBlockMax {
-			s.mu.Lock()
-			_, alreadyBlocked := s.blockedIPs[ip]
-			s.mu.Unlock()
-
-			if !alreadyBlocked {
-				log.Printf("[DDoS Shield] IP %s exceeded connection limit (%d sockets). Dropping at kernel level!\n", ip, count)
-				s.BlockIPKernel(ip, fmt.Sprintf("Anti-Flood Guard: %d concurrent sockets", count))
-			}
+	// Check against Cloudflare and private subnets
+	for _, cidr := range cloudflareCIDRs {
+		_, block, err := net.ParseCIDR(cidr)
+		if err == nil && block.Contains(ip) {
+			return true
 		}
 	}
+
+	return false
 }
 
 // BlockIPKernel executes iptables -I INPUT 1 -s <ip> -j DROP
@@ -447,9 +449,11 @@ func (s *AgentServer) BlockIPKernel(ip string, reason string) error {
 	}
 
 	cleanIP := parsed.String()
-	// Never block localhost
-	if cleanIP == "127.0.0.1" || cleanIP == "::1" {
-		return fmt.Errorf("refusing to block localhost")
+
+	// Never block server host, loopback, or Cloudflare proxy/tunnel!
+	if isProtectedIP(parsed) {
+		log.Printf("[Kernel Block Refused] IP %s is protected (Server host / Cloudflare / LAN). Skipping block.\n", cleanIP)
+		return fmt.Errorf("refusing to block protected IP %s", cleanIP)
 	}
 
 	s.mu.Lock()
@@ -513,8 +517,6 @@ func main() {
 		ticker := time.NewTicker(500 * time.Millisecond)
 		defer ticker.Stop()
 
-		floodCounter := 0
-
 		for range ticker.C {
 			metrics := server.collectFullMetrics()
 
@@ -524,12 +526,6 @@ func main() {
 
 			// Sync to /dev/shm
 			server.syncToSharedMemory(metrics)
-
-			// Check TCP connection flood guard every 2.5 seconds (every 5 ticks)
-			floodCounter++
-			if floodCounter%5 == 0 {
-				server.checkActiveConnectionFloods()
-			}
 		}
 	}()
 

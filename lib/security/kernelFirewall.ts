@@ -77,3 +77,33 @@ export async function unblockIpAtKernel(ip: string): Promise<boolean> {
   return false;
 }
 
+/**
+ * Retrieves all kernel blocked IPs currently dropped in iptables by Go agent
+ */
+export async function getKernelBlockedIps(): Promise<Record<string, string>> {
+  return new Promise((resolve) => {
+    const req = http.request(
+      `${AGENT_URL}/api/blocked`,
+      { method: 'GET', timeout: 500 },
+      (res) => {
+        let body = '';
+        res.on('data', (c) => (body += c));
+        res.on('end', () => {
+          try {
+            const parsed = JSON.parse(body);
+            resolve(parsed.ips || {});
+          } catch {
+            resolve({});
+          }
+        });
+      }
+    );
+    req.on('error', () => resolve({}));
+    req.on('timeout', () => {
+      req.destroy();
+      resolve({});
+    });
+    req.end();
+  });
+}
+
